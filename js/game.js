@@ -1,12 +1,28 @@
+// Игровой цикл, синхронизация с Firebase и рендер через spriteSystem.
 import { db, ref, update, onValue } from './firebase.js';
 import { Player } from './player.js';
-import { createZombie, roleToZombieType, createZombiesForPlayerCount } from './zombieTypes.js';
+import {
+  createZombie, roleToZombieType, createZombiesForPlayerCount
+} from './zombieTypes.js';
 import { setGameStatus } from './ui.js';
 import { UpgradeManager } from './upgrades.js';
+import { drawPlayer, drawBase } from './spriteSystem.js';
+
+// Опциональный импорт каталога улучшений.
+// Если файл недоступен — ловим ошибку и работаем без восстановления улучшений по id.
+let getAllUpgrades = () => [];
+try {
+  const mod = await import('./upgrades/index.js');
+  if (typeof mod.getAllUpgrades === 'function') {
+    getAllUpgrades = mod.getAllUpgrades;
+  }
+} catch (_) {
+  // нет каталога — не критично, работаем со старым форматом data.upgrade
+}
 
 const CANVAS_W = 800;
 const CANVAS_H = 600;
-const SYNC_INTERVAL_MS = 50;   // 20 записей/сек
+const SYNC_INTERVAL_MS = 50;    // 20 записей/сек
 const ATTACK_COOLDOWN_MS = 800;
 const ATTACK_RANGE = 34;
 const SUPPORT_RANGE = 160;
@@ -23,15 +39,19 @@ export class Game {
 
     this.canvas = null;
     this.ctx = null;
-    this.players = new Map(); // uid -> Player
+    this.players = new Map();     // uid -> Player
     this.myPlayer = null;
     this.keys = {};
     this.running = false;
     this.rafId = null;
     this.lastFrame = 0;
     this.lastSync = 0;
+    this.startTime = 0;           // для state.t в spriteSystem
     this.unsubRoom = null;
     this._winnerReported = false;
+
+    // Кэш каталога улучшений по id
+    this._upgradeIndex = null;
   }
 
   start() {
@@ -40,7 +60,8 @@ export class Game {
     this.buildPlayers(this.room);
     this.subscribeRoom();
     this.running = true;
-    this.lastFrame = performance.now();
+    this.startTime = performance.now();
+    this.lastFrame = this.startTime;
     this.rafId = requestAnimationFrame((t) => this.loop(t));
   }
 
@@ -57,7 +78,8 @@ export class Game {
     if (!this.canvas) {
       this.canvas = document.createElement('canvas');
       this.canvas.id = 'game-canvas';
-      document.getElementById('game-screen').appendChild(this.canvas);
+      const screen = document.getElementById('game-screen');
+      if (screen) screen.appendChild(this.canvas);
     }
     this.canvas.width = CANVAS_W;
     this.canvas.height = CANVAS_H;
@@ -67,7 +89,6 @@ export class Game {
   setupInput() {
     this._kd = (e) => {
       const k = e.key.toLowerCase();
-      // Стрелки не должны скроллить страницу во время игры
       if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k)) {
         e.preventDefault();
       }
@@ -78,6 +99,18 @@ export class Game {
     window.addEventListener('keyup', this._ku);
   }
 
+  // Кэш каталога по id — строится один раз
+  _getUpgradeIndex() {
+    if (this._upgradeIndex) return this._upgradeIndex;
+    const idx = new Map();
+    try {
+      const all = getAllUpgrades() || [];
+      for (const u of all) if (u && u.id) idx.set(u.id, u);
+    } catch (_) { /* ignore */ }
+    this._upgradeIndex = idx;
+    return idx;
+  }
+
   // Определение типа зомби для игрока
   determineZombieType(pid, room) {
     const data = room.players[pid] || {};
@@ -85,7 +118,7 @@ export class Game {
     if (data.role && data.role.startsWith('zombie_')) {
       return roleToZombieType(data.role);
     }
-    // Фолбэк: определяем по количеству игроков
+    // Фолбэк: по числу игроков
     const totalCount = Object.keys(room.players || {}).length;
     const zombieIds = Object.keys(room.players || {})
       .filter(id => id !== room.survivorId);
@@ -106,7 +139,6 @@ export class Game {
     for (const [pid, data] of Object.entries(rPlayers)) {
       const isSurvivor = pid === survivorId;
 
-      // Начальные координаты
       let spawnX, spawnY;
       if (data.pos) {
         spawnX = data.pos.x;
@@ -140,12 +172,23 @@ export class Game {
         p = createZombie(type, baseOpts);
       }
 
-      // Применяем сохранённое улучшение
+      // Восстанавливаем выбранные улучшения (если есть)
+      this._applyUpgradesFromData(p, data);
+
+      // Старое числовое улучшение — оставляем для совместимости
       if (data.upgrade) {
         UpgradeManager.applyUpgrade(p, data.upgrade);
+        p.upgrade = data.upgrade;
       }
-      if (typeof data.hp === 'number') p.hp = data.hp;
+
+      // Пересобрать визуальные слои (на случай, если upgrades добавились после конструктора)
+      p.refreshVisualLayers();
+
+      // Синхронизируем HP/alive, если есть в Firebase
+      if (typeof data.hp    === 'number') p.hp = data.hp;
       if (typeof data.alive === 'boolean') p.alive = data.alive;
+      p._prevX = p.x;
+      p._prevY = p.y;
 
       this.players.set(pid, p);
     }
@@ -153,47 +196,70 @@ export class Game {
     this.myPlayer = this.players.get(this.uid) || null;
   }
 
+  // Восстанавливает массив улучшений из data
+  // Поддерживаемые форматы:
+  //   data.upgrades — массив объектов полных улучшений (новый)
+  //   data.upgradesIds — массив строк id (если game.js/pickRoles так пишет)
+  //   data.upgradeIds  — альтернативное имя
+  _applyUpgradesFromData(p, data) {
+    const idx = this._getUpgradeIndex();
+    const addFromObj = (u) => { if (u) p.addUpgrade(u); };
+    const addFromId  = (id) => { const u = idx.get(id); if (u) p.addUpgrade(u); };
+
+    if (Array.isArray(data.upgrades) && data.upgrades.length) {
+      for (const u of data.upgrades) {
+        if (typeof u === 'string') addFromId(u);
+        else addFromObj(u);
+      }
+      return;
+    }
+    if (Array.isArray(data.upgradesIds)) {
+      for (const id of data.upgradesIds) addFromId(id);
+      return;
+    }
+    if (Array.isArray(data.upgradeIds)) {
+      for (const id of data.upgradeIds) addFromId(id);
+    }
+  }
+
   subscribeRoom() {
     const roomRef = ref(db, `rooms/${this.roomId}`);
     this.unsubRoom = onValue(roomRef, (snap) => {
       const room = snap.val();
-      if (!room) {
-        this.stop();
-        return;
-      }
+      if (!room) { this.stop(); return; }
       this.roomData = room;
 
       if (room.state === 'finished') {
-        this.checkWinCondition(); // финальный расчёт не нужен
+        this.checkWinCondition();
         this.stop();
         return;
       }
       if (room.state !== 'playing') return;
 
-      // Обновляем / добавляем / удаляем игроков
       const presentIds = new Set(Object.keys(room.players || {}));
       for (const [pid, data] of Object.entries(room.players || {})) {
         let p = this.players.get(pid);
         if (!p) {
-          // На случай, если игрок появился позже (например, реконнект)
           const base = { id: pid, name: data.name, canvasW: CANVAS_W, canvasH: CANVAS_H };
           if (pid === room.survivorId) p = new Player({ ...base, role: 'survivor' });
           else {
             const t = this.determineZombieType(pid, room);
             p = createZombie(t, base);
           }
+          this._applyUpgradesFromData(p, data);
           if (data.upgrade) UpgradeManager.applyUpgrade(p, data.upgrade);
+          p.refreshVisualLayers();
+          p._prevX = p.x = data.pos ? data.pos.x : CANVAS_W / 2;
+          p._prevY = p.y = data.pos ? data.pos.y : CANVAS_H / 2;
           this.players.set(pid, p);
         }
-        // Позиции других игроков берём из Firebase
         if (data.pos && pid !== this.uid) {
           p.x = data.pos.x;
           p.y = data.pos.y;
         }
-        if (typeof data.hp === 'number') p.hp = data.hp;
+        if (typeof data.hp    === 'number')  p.hp    = data.hp;
         if (typeof data.alive === 'boolean') p.alive = data.alive;
       }
-      // Удаляем вышедших
       for (const pid of [...this.players.keys()]) {
         if (!presentIds.has(pid)) this.players.delete(pid);
       }
@@ -209,7 +275,6 @@ export class Game {
     const survivorId = this.roomData.survivorId;
     const survivorInRoom = this.roomData.players?.[survivorId];
 
-    // Выживший вышел — победа зомби
     if (!survivorInRoom) {
       this._winnerReported = true;
       this.onFinish('zombies');
@@ -249,7 +314,6 @@ export class Game {
     if (!this.myPlayer || !this.myPlayer.alive) return;
     if (this.roomData?.state !== 'playing') return;
 
-    // Ввод движения
     let dx = 0, dy = 0;
     if (this.keys['w'] || this.keys['ц'] || this.keys['arrowup'])    dy -= 1;
     if (this.keys['s'] || this.keys['ы'] || this.keys['arrowdown'])  dy += 1;
@@ -258,6 +322,7 @@ export class Game {
 
     if (dx || dy) {
       const len = Math.hypot(dx, dy) || 1;
+      this.myPlayer.angle = Math.atan2(dy, dx);
       this.myPlayer.move(
         (dx / len) * this.myPlayer.speed * dt,
         (dy / len) * this.myPlayer.speed * dt
@@ -268,7 +333,6 @@ export class Game {
     this.handleSupportHeal(dt);
   }
 
-  // ---- Боевая логика (клиент-авторитетная, по своей роли) ----
   handleCombat() {
     const me = this.myPlayer;
     if (!me || !me.alive) return;
@@ -284,21 +348,20 @@ export class Game {
       const dist = Math.hypot(other.x - me.x, other.y - me.y);
       if (dist > ATTACK_RANGE) continue;
 
-      // Выживший бьёт только зомби, зомби — только выжившего
-      const isMeSurvivor = me.id === this.roomData.survivorId;
+      const isMeSurvivor    = me.id === this.roomData.survivorId;
       const isOtherSurvivor = other.id === this.roomData.survivorId;
       if (isMeSurvivor === isOtherSurvivor) continue;
 
       me._lastHit = now;
       this.resolveDamage(me, other);
-      return; // одна цель за тик
+      return;
     }
   }
 
   resolveDamage(attacker, target) {
     const dmg = attacker.damage * 0.5;
 
-    // Танк-зомби может защитить союзника-зомби
+    // Танк-зомби защищает союзника-зомби
     if (target.id !== this.roomData.survivorId) {
       let tank = null;
       for (const p of this.players.values()) {
@@ -321,7 +384,6 @@ export class Game {
     this.syncPlayer(target);
   }
 
-  // Помогающий зомби лечит ближайшего раненого союзника
   handleSupportHeal(dt) {
     const me = this.myPlayer;
     if (!me || me.role !== 'zombie_support' || !me.alive) return;
@@ -351,7 +413,6 @@ export class Game {
     }
   }
 
-  // ---- Синхронизация с Firebase ----
   syncMyState() {
     if (!this.myPlayer) return;
     const myRef = ref(db, `rooms/${this.roomId}/players/${this.uid}`);
@@ -375,6 +436,9 @@ export class Game {
     const ctx = this.ctx;
     if (!ctx) return;
 
+    const now = performance.now();
+    const tSeconds = (now - this.startTime) / 1000;
+
     // Фон
     ctx.fillStyle = '#0a0a0f';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
@@ -389,63 +453,42 @@ export class Game {
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CANVAS_W, y); ctx.stroke();
     }
 
-    // Игроки
+    // База (если есть)
+    if (this.base) drawBase(ctx, this.base, now);
+
+    // Игроки через spriteSystem
     for (const p of this.players.values()) {
       if (!p.alive) continue;
-      this.drawPlayer(ctx, p);
+
+      const dx = Math.abs(p.x - (p._prevX ?? p.x));
+      const dy = Math.abs(p.y - (p._prevY ?? p.y));
+      const isMoving = (dx + dy) > 0.5;
+
+      const state = {
+        t: tSeconds,
+        isLocal: p.id === this.uid,
+        isAttacking: p._lastHit && (now - p._lastHit) < 150,
+        isMoving
+      };
+
+      drawPlayer(ctx, p, now, state);
+
+      p._prevX = p.x;
+      p._prevY = p.y;
     }
 
     // HUD
     if (this.myPlayer) {
       const me = this.myPlayer;
-      const roleLabel = me.role === 'survivor' ? 'Выживший' :
-        me.role === 'zombie_tank' ? 'Танк' :
+      const roleLabel =
+        me.role === 'survivor'        ? 'Выживший' :
+        me.role === 'zombie_tank'     ? 'Танк' :
         me.role === 'zombie_attacker' ? 'Атакующий' :
-        me.role === 'zombie_support' ? 'Помогающий' : me.role;
+        me.role === 'zombie_support'  ? 'Помогающий' : me.role;
       const status = me.alive
         ? `${roleLabel} | HP: ${Math.round(me.hp)}/${Math.round(me.maxHp)} | WASD для движения`
         : `${roleLabel} | Вы мертвы`;
       setGameStatus(status);
     }
-  }
-
-  drawPlayer(ctx, p) {
-    let color = '#888888';
-    if (p.role === 'survivor')        color = '#4ade80';
-    else if (p.role === 'zombie_attacker') color = '#ef4444';
-    else if (p.role === 'zombie_tank')     color = '#3b82f6';
-    else if (p.role === 'zombie_support')  color = '#a855f7';
-
-    const isMe = p.id === this.uid;
-    const r = 20;
-
-    // Круг
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-
-    // Обводка своей роли / "это я"
-    if (isMe) {
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 3;
-      ctx.stroke();
-    }
-
-    // HP-бар
-    const hpPct = Math.max(0, p.hp / p.maxHp);
-    const barW = 44;
-    const barX = p.x - barW / 2;
-    const barY = p.y - r - 12;
-    ctx.fillStyle = '#000';
-    ctx.fillRect(barX, barY, barW, 5);
-    ctx.fillStyle = hpPct > 0.5 ? '#22c55e' : hpPct > 0.25 ? '#eab308' : '#ef4444';
-    ctx.fillRect(barX, barY, barW * hpPct, 5);
-
-    // Имя
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '12px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(p.name + (isMe ? ' (вы)' : ''), p.x, barY - 4);
   }
 }

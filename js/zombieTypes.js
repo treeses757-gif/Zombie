@@ -1,3 +1,6 @@
+// Типы зомби + фабрика. Каждый класс задаёт свой базовый style
+// (используется PART_RENDERERS в spriteSystem.js и игровой логикой).
+
 import { Player } from './player.js';
 
 // Танк: много HP, медленный, защищает союзников
@@ -9,13 +12,21 @@ export class TankZombie extends Player {
     this.speed *= 0.6;
     this.damage *= 0.7;
     this.shield = true;
+
+    // Базовый визуальный стиль
+    this.style = {
+      bodyColor:   '#71717a',
+      accentColor: '#52525b',
+      eyeColor:    '#fbbf24',
+      shieldColor: '#52525b'
+    };
   }
 
   // Поглотить часть урона, летящего в союзника. Возвращает сколько принял на себя.
   absorbDamage(ally, amount) {
     if (!this.shield || !this.alive || !ally.alive) return 0;
     const absorbed = amount * 0.6;
-    this.takeDamage(absorbed * 0.5); // сам получает половину того, что закрыл
+    this.takeDamage(absorbed * 0.5);
     return absorbed;
   }
 }
@@ -28,6 +39,13 @@ export class AttackerZombie extends Player {
     this.hp = this.maxHp;
     this.speed *= 1.3;
     this.damage *= 1.5;
+
+    this.style = {
+      bodyColor:   '#4d7c0f',
+      accentColor: '#dc2626',
+      eyeColor:    '#ff3030',
+      clawColor:   '#fbbf24'
+    };
   }
 }
 
@@ -39,6 +57,13 @@ export class SupportZombie extends Player {
     this.hp = this.maxHp;
     this.damage *= 0.5;
     this.healCooldown = 0; // сек
+
+    this.style = {
+      bodyColor:   '#7c3aed',
+      accentColor: '#4ade80',
+      eyeColor:    '#22d3ee',
+      crystalColor:'#4ade80'
+    };
   }
 
   healAlly(ally, amount) {
@@ -62,16 +87,16 @@ export function createZombiesForPlayerCount(count) {
 // Фабрика конкретного зомби по типу
 export function createZombie(type, opts) {
   switch (type) {
-    case 'tank':     return new TankZombie(opts);
-    case 'support':  return new SupportZombie(opts);
+    case 'tank':    return new TankZombie(opts);
+    case 'support': return new SupportZombie(opts);
     case 'attacker':
-    default:         return new AttackerZombie(opts);
+    default:        return new AttackerZombie(opts);
   }
 }
 
-// Маппинг role → тип (для случаев, когда rooms.js пишет role)
+// Маппинг role → тип (когда rooms.js уже записал role в Firebase)
 export function roleToZombieType(role) {
-  if (role === 'zombie_tank') return 'tank';
+  if (role === 'zombie_tank')    return 'tank';
   if (role === 'zombie_support') return 'support';
   return 'attacker';
 }
