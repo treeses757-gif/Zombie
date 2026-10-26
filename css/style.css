@@ -1,0 +1,103 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #0f0f14;
+  color: #e8e8ec;
+  min-height: 100vh;
+}
+
+.screen {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+h1, h2 { text-align: center; }
+
+button {
+  padding: 10px 18px;
+  background: #4ade80;
+  color: #111;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 15px;
+  margin: 6px 0;
+}
+button:hover { background: #22c55e; }
+button:disabled { background: #444; color: #888; cursor: not-allowed; }
+
+input, textarea {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  margin: 6px 0 12px;
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: #1a1a22;
+  color: #e8e8ec;
+  font-family: inherit;
+  font-size: 15px;
+}
+
+.menu-box {
+  max-width: 360px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.divider {
+  text-align: center;
+  color: #666;
+  margin: 12px 0;
+}
+
+#lobby-players {
+  list-style: none;
+  padding: 0;
+  max-width: 400px;
+  margin: 16px auto;
+}
+#lobby-players li {
+  padding: 8px 12px;
+  background: #1a1a22;
+  margin: 6px 0;
+  border-radius: 6px;
+}
+
+#lobby-status, #upgrade-message, #upgrade-progress {
+  text-align: center;
+  min-height: 20px;
+  margin: 8px 0;
+}
+
+#game-screen {
+  text-align: center;
+}
+#game-status {
+  font-family: monospace;
+  padding: 8px;
+  background: #1a1a22;
+  border-radius: 6px 6px 0 0;
+  max-width: 800px;
+  margin: 0 auto;
+}
+#game-canvas {
+  background: #000;
+  border-radius: 0 0 6px 6px;
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  image-rendering: pixelated;
+}
+
+code {
+  background: #1a1a22;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  color: #fbbf24;
+}
