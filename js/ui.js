@@ -9,7 +9,6 @@ const SCREENS = [
   'end-screen'
 ];
 
-// Показать один экран, скрыть остальные
 export function showScreen(id) {
   SCREENS.forEach(s => {
     const el = document.getElementById(s);
@@ -18,7 +17,6 @@ export function showScreen(id) {
   window.__currentScreen = id;
 }
 
-// Человекочитаемое имя роли
 export function formatRole(role) {
   switch (role) {
     case 'survivor':        return 'Выживший';
@@ -30,13 +28,11 @@ export function formatRole(role) {
   }
 }
 
-// Лобби: список игроков
 export function updateLobby(room, uid) {
   const list = document.getElementById('lobby-players');
   if (!list) return;
   list.innerHTML = '';
   if (!room || !room.players) return;
-
   for (const [pid, p] of Object.entries(room.players)) {
     const li = document.createElement('li');
     const isHost = room.host === pid;
@@ -48,34 +44,28 @@ export function updateLobby(room, uid) {
   }
 }
 
-// Статусная строка лобби
 export function updateLobbyStatus(text) {
   const el = document.getElementById('lobby-status');
   if (el) el.textContent = text || '';
 }
 
-// Кнопка "Старт" активна только у хоста при достаточном числе игроков
 export function enableStartButton(enabled) {
   const btn = document.getElementById('start-btn');
   if (btn) btn.disabled = !enabled;
 }
 
-// Отображение ID комнаты
 export function setRoomIdDisplay(roomId) {
   const el = document.getElementById('lobby-room-id');
   if (el) el.textContent = roomId || '—';
 }
 
-// Экран улучшения. role — строка, defaultUpgrades — массив объектов для показа,
-// onSubmit() вызывается при нажатии "Подтвердить".
+// ГЛАВНОЕ ИСПРАВЛЕНИЕ: textarea — отдельный элемент, её parentNode НЕ скрываем.
 export function showUpgradeScreen(role, defaultUpgrades, onSubmit) {
   showScreen('upgrade-screen');
 
-  // Роль
   const roleEl = document.getElementById('upgrade-role');
   if (roleEl) roleEl.textContent = formatRole(role);
 
-  // Список стартовых улучшений (только для показа)
   const listEl = document.getElementById('upgrade-list');
   if (listEl) {
     listEl.innerHTML = '';
@@ -94,11 +84,9 @@ export function showUpgradeScreen(role, defaultUpgrades, onSubmit) {
     }
   }
 
-  // Сброс сообщений
   showUpgradeMessage('');
   setUpgradeProgress('');
 
-  // Пересоздаём кнопку, чтобы убрать старые обработчики
   const btn = document.getElementById('upgrade-submit');
   if (btn) {
     const clone = btn.cloneNode(true);
@@ -107,16 +95,16 @@ export function showUpgradeScreen(role, defaultUpgrades, onSubmit) {
     clone.addEventListener('click', () => onSubmit());
   }
 
-  // На случай, если textarea ещё используется (опционально)
+  // FIX: скрываем только сам textarea, а НЕ его родителя (иначе скроется весь экран)
   const ta = document.getElementById('upgrade-input');
   if (ta) {
     ta.disabled = false;
     ta.value = '';
-    ta.parentNode.style.display = 'none'; // скрываем — не используем
+    ta.style.display = 'none';
+    // ❌ БЫЛО: ta.parentNode.style.display = 'none';  — ЭТО СКРЫВАЛО ВЕСЬ ЭКРАН
   }
 }
 
-// Сообщение об ошибке/успехе
 export function showUpgradeMessage(text, isError = false) {
   const el = document.getElementById('upgrade-message');
   if (!el) return;
@@ -124,19 +112,16 @@ export function showUpgradeMessage(text, isError = false) {
   el.style.color = isError ? '#ff6b6b' : '#6bff95';
 }
 
-// Роль на экране улучшения
 export function setUpgradeRole(role) {
   const el = document.getElementById('upgrade-role');
   if (el) el.textContent = formatRole(role);
 }
 
-// Прогресс: "Готовы: 2/3"
 export function setUpgradeProgress(text) {
   const el = document.getElementById('upgrade-progress');
   if (el) el.textContent = text || '';
 }
 
-// Конец игры
 export function showEndScreen(winner) {
   showScreen('end-screen');
   const t = document.getElementById('end-title');
@@ -146,7 +131,6 @@ export function showEndScreen(winner) {
   else t.textContent = 'Игра окончена';
 }
 
-// HUD в игре
 export function setGameStatus(text) {
   const el = document.getElementById('game-status');
   if (el) el.textContent = text || '';
