@@ -5,8 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Zombie Game</title>
   <link rel="stylesheet" href="./css/style.css" />
-
-  <!-- Firebase через ES-модули (CDN), без сборщика -->
   <script type="importmap">
     {
       "imports": {
@@ -19,33 +17,21 @@
 </head>
 <body>
 
-  <!-- ============================================================ -->
-  <!-- ЭКРАН 1: ГЛАВНОЕ МЕНЮ                                       -->
-  <!-- ============================================================ -->
   <div id="menu-screen" class="screen">
     <h1>🧟 Zombie Game</h1>
     <div class="menu-box">
-      <label>
-        Ваше имя:
+      <label>Ваше имя:
         <input id="player-name" type="text" maxlength="16" placeholder="Игрок" />
       </label>
-
       <button id="create-room-btn">Создать комнату</button>
-
       <div class="divider">или</div>
-
-      <label>
-        ID комнаты:
+      <label>ID комнаты:
         <input id="join-room-id" type="text" maxlength="8" placeholder="ABC123" />
       </label>
-
       <button id="join-room-btn">Присоединиться</button>
     </div>
   </div>
 
-  <!-- ============================================================ -->
-  <!-- ЭКРАН 2: ЛОББИ                                              -->
-  <!-- ============================================================ -->
   <div id="lobby-screen" class="screen" style="display:none">
     <h2>Лобби</h2>
     <p>ID комнаты: <span id="lobby-room-id">—</span></p>
@@ -54,40 +40,27 @@
     <button id="start-btn" disabled>Старт (только хост)</button>
   </div>
 
-  <!-- ============================================================ -->
-  <!-- ЭКРАН 3: УЛУЧШЕНИЯ                                          -->
-  <!-- ============================================================ -->
   <div id="upgrade-screen" class="screen" style="display:none">
     <h2>Улучшение персонажа</h2>
     <p>Ваша роль: <b id="upgrade-role">—</b></p>
     <p>Стартовые улучшения на этот раунд:</p>
     <div id="upgrade-list"></div>
-
-    <!-- Скрытая textarea для совместимости со старыми обработчиками -->
     <textarea id="upgrade-input" rows="3" style="display:none"></textarea>
-
     <button id="upgrade-submit">Подтвердить</button>
     <p id="upgrade-message"></p>
     <p id="upgrade-progress"></p>
   </div>
 
-  <!-- ============================================================ -->
-  <!-- ЭКРАН 4: ИГРА                                               -->
-  <!-- ============================================================ -->
   <div id="game-screen" class="screen" style="display:none">
     <div id="game-status"></div>
-    <canvas id="gameCanvas" width="800" height="600" tabindex="0"></canvas>
+    <canvas id="gameCanvas" width="800" height="600" tabindex="0" style="display:block;width:100vw;height:100vh"></canvas>
   </div>
 
-  <!-- ============================================================ -->
-  <!-- ЭКРАН 5: КОНЕЦ                                              -->
-  <!-- ============================================================ -->
   <div id="end-screen" class="screen" style="display:none">
     <h2 id="end-title">Игра окончена</h2>
     <button onclick="location.reload()">Играть снова</button>
   </div>
 
-  <!-- Точка входа -->
   <script type="module" src="./js/main.js"></script>
 </body>
 </html>

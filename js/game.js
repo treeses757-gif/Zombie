@@ -1,30 +1,22 @@
-// FIX 1: стартовые upgrades и их применение
-// FIX 3: ввод мыши/клавиатуры, атаки, урон через Firebase
-// FIX 4: карта 4000×3000, тайлы, мини-карта
-// FIX 5: база, её отрисовка и победа
-// FIX 6: плавная камера, интерполяция удалённых игроков, throttle синка
+// js/game.js
+// FIX A3: resizeCanvas, FIX A4: порядок рендера, FIX B1-B10: стрельба.
 import { db, ref, update, onValue, get } from './firebase.js';
 import { Player } from './player.js';
-import {
-  createZombie, roleToZombieType, createZombiesForPlayerCount
-} from './zombieTypes.js';
+import { createZombie, roleToZombieType, createZombiesForPlayerCount } from './zombieTypes.js';
 import { setGameStatus } from './ui.js';
-import { drawPlayer, drawBase, getPartsForPlayer } from './spriteSystem.js';
+import { drawPlayer, drawBase } from './spriteSystem.js';
 
-// FIX 4: константы мира
 const WORLD_WIDTH = 4000;
 const WORLD_HEIGHT = 3000;
 const TILE = 200;
 const SYNC_INTERVAL_MS = 50;
-const ATTACK_RANGE = 34;
 const SUPPORT_RANGE = 160;
 const SUPPORT_HEAL = 22;
 const TANK_SHIELD_RANGE = 100;
 const BASE_ATTACK_RANGE = 40;
-const ROUND_DURATION_MS = 180000; // 3 минуты
+const ROUND_DURATION_MS = 180000;
 
-// Каталог улучшений (опционально)
-let getUpgradeById = (id) => null;
+let getUpgradeById = () => null;
 try {
   const mod = await import('./upgrades/index.js');
   if (typeof mod.getUpgradeById === 'function') getUpgradeById = mod.getUpgradeById;
@@ -33,14 +25,29 @@ try {
     for (const u of mod.getAllUpgrades() || []) if (u?.id) idx.set(u.id, u);
     getUpgradeById = (id) => idx.get(id) || null;
   }
-} catch (_) { /* нет каталога — не критично */ }
+} catch (e) { console.warn('[game] upgrades catalog недоступен:', e); }
 
-// FIX 6: lerpAngle
 function lerpAngle(a, b, t) {
   const d = ((b - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
   return a + d * t;
 }
 const clamp = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
+
+// FIX B6: пересечение луча и круга
+function lineCircleIntersect(x1, y1, x2, y2, cx, cy, r) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const fx = x1 - cx, fy = y1 - cy;
+  const a = dx * dx + dy * dy;
+  if (a === 0) return false;
+  const b = 2 * (fx * dx + fy * dy);
+  const c = fx * fx + fy * fy - r * r;
+  let disc = b * b - 4 * a * c;
+  if (disc < 0) return false;
+  disc = Math.sqrt(disc);
+  const t1 = (-b - disc) / (2 * a);
+  const t2 = (-b + disc) / (2 * a);
+  return (t1 >= 0 && t1 <= 1) || (t2 >= 0 && t2 <= 1);
+}
 
 export class Game {
   constructor({ roomId, uid, room, onFinish }) {
@@ -50,20 +57,26 @@ export class Game {
     this.roomData = room;
     this.onFinish = onFinish || (() => {});
 
-    this.canvas = null; this.ctx = null;
+    this.canvas = null;
+    this.ctx = null;
     this.players = new Map();
     this.myPlayer = null;
     this.base = { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2, hp: 1000, maxHp: 1000, alive: true };
 
-    // FIX 6: камера
     this.camera = { x: 0, y: 0 };
 
-    // FIX 3: ввод
+    // FIX B1: состояние ввода
     this.input = {
-      mouseX: 0, mouseY: 0, mouseWorldX: 0, mouseWorldY: 0,
-      attackCooldown: 0, isMouseDown: false, isRightDown: false
+      mouseX: 0, mouseY: 0,
+      mouseWorldX: 0, mouseWorldY: 0,
+      attackCooldown: 0,
+      isMouseDown: false,
+      isRightDown: false
     };
     this.keys = {};
+
+    // FIX B4: визуальные трассеры
+    this.tracers = [];
 
     this.running = false;
     this.rafId = null;
@@ -74,7 +87,7 @@ export class Game {
     this.unsubRoom = null;
     this.unsubBase = null;
     this._winnerReported = false;
-    this._upgradeIndex = null;
+    this._resizeHandler = null;
   }
 
   start() {
@@ -83,12 +96,18 @@ export class Game {
     this.buildPlayers(this.room);
     this.subscribeRoom();
     this.subscribeBase();
-    // FIX 5: создать базу в Firebase, если её нет
     this.ensureBaseInFirebase();
     this.running = true;
     this.startTime = performance.now();
     this.roundStartedAt = this.startTime;
     this.lastFrame = this.startTime;
+
+    // FIX B2: стартовая позиция мыши — правее центра, чтобы при первом клике стрелять вправо
+    this.input.mouseX = this.canvas.width / 2 + 60;
+    this.input.mouseY = this.canvas.height / 2;
+    this.input.mouseWorldX = this.input.mouseX + this.camera.x;
+    this.input.mouseWorldY = this.input.mouseY + this.camera.y;
+
     this.rafId = requestAnimationFrame((t) => this.loop(t));
   }
 
@@ -99,6 +118,7 @@ export class Game {
     if (this.unsubBase) this.unsubBase();
     window.removeEventListener('keydown', this._kd);
     window.removeEventListener('keyup', this._ku);
+    if (this._resizeHandler) window.removeEventListener('resize', this._resizeHandler);
     if (this.canvas) {
       this.canvas.removeEventListener('mousedown', this._md);
       this.canvas.removeEventListener('mouseup', this._mu);
@@ -107,6 +127,7 @@ export class Game {
     }
   }
 
+  // FIX A3: canvas = размер окна
   setupCanvas() {
     this.canvas = document.getElementById('gameCanvas') || document.getElementById('game-canvas');
     if (!this.canvas) {
@@ -115,29 +136,43 @@ export class Game {
       const scr = document.getElementById('game-screen');
       if (scr) scr.appendChild(this.canvas);
     }
-    this.canvas.width = 800;
-    this.canvas.height = 600;
-    this.canvas.tabIndex = 0; // FIX 3
+    this.canvas.tabIndex = 0;
     this.ctx = this.canvas.getContext('2d');
+    this.resizeCanvas();
+    this._resizeHandler = () => this.resizeCanvas();
+    window.addEventListener('resize', this._resizeHandler);
+  }
+  resizeCanvas() {
+    if (!this.canvas) return;
+    this.canvas.width = window.innerWidth;
+    this.canvas.height = window.innerHeight;
   }
 
-  // FIX 3: обработка мыши и клавиатуры
+  // FIX B1: полный набор обработчиков мыши/клавиатуры
   setupInput() {
     this._kd = (e) => {
       const k = e.key.toLowerCase();
       if (['w','a','s','d','ц','ф','ы','в','arrowup','arrowdown','arrowleft','arrowright',' '].includes(k)) e.preventDefault();
       this.keys[k] = true;
-      if (k === ' ') this.tryAttack(false); // space = ЛКМ
     };
     this._ku = (e) => { this.keys[e.key.toLowerCase()] = false; };
+
     this._mm = (e) => {
+      const r = this.canvas.getBoundingClientRect();
+      this.input.mouseX = e.clientX - r.left;
+      this.input.mouseY = e.clientY - r.top;
+      // FIX B5: пересчёт в мировые сразу
+      this.input.mouseWorldX = this.input.mouseX + this.camera.x;
+      this.input.mouseWorldY = this.input.mouseY + this.camera.y;
+    };
+    this._md = (e) => {
+      // FIX B1: обновляем mouseWorld и в mousedown
       const r = this.canvas.getBoundingClientRect();
       this.input.mouseX = e.clientX - r.left;
       this.input.mouseY = e.clientY - r.top;
       this.input.mouseWorldX = this.input.mouseX + this.camera.x;
       this.input.mouseWorldY = this.input.mouseY + this.camera.y;
-    };
-    this._md = (e) => {
+
       if (e.button === 0) { this.input.isMouseDown = true; this.tryAttack(false); }
       else if (e.button === 2) { this.input.isRightDown = true; this.tryAttack(true); e.preventDefault(); }
     };
@@ -146,6 +181,7 @@ export class Game {
       if (e.button === 2) this.input.isRightDown = false;
     };
     this._cm = (e) => e.preventDefault();
+
     window.addEventListener('keydown', this._kd);
     window.addEventListener('keyup', this._ku);
     this.canvas.addEventListener('mousemove', this._mm);
@@ -158,13 +194,12 @@ export class Game {
     const data = room.players[pid] || {};
     if (data.zombieType) return data.zombieType;
     if (data.role && data.role.startsWith('zombie_')) return roleToZombieType(data.role);
-    const totalCount = Object.keys(room.players || {}).length;
+    const total = Object.keys(room.players || {}).length;
     const zids = Object.keys(room.players || {}).filter(id => id !== room.survivorId);
-    const types = createZombiesForPlayerCount(totalCount);
+    const types = createZombiesForPlayerCount(total);
     return types[zids.indexOf(pid)] || 'attacker';
   }
 
-  // FIX 1: стартовые upgrades применяются, если в Firebase их нет
   applyStartingUpgrades(p) {
     for (const id of p.defaultUpgradeIds || []) {
       const upg = getUpgradeById(id);
@@ -174,24 +209,21 @@ export class Game {
   }
 
   applyUpgradesFromData(p, data) {
-    let applied = 0;
-    const add = (u) => { if (u) { p.applyUpgrade(u); applied++; } };
-    const addById = (id) => { add(getUpgradeById(id)); };
-    if (Array.isArray(data.upgrades) && data.upgrades.length) {
-      for (const u of data.upgrades) {
-        if (typeof u === 'string') addById(u);
-        else add(u);
-      }
+    let n = 0;
+    const add = (u) => { if (u) { p.applyUpgrade(u); n++; } };
+    const addById = (id) => add(getUpgradeById(id));
+    if (Array.isArray(data.upgrades)) for (const u of data.upgrades) {
+      if (typeof u === 'string') addById(u); else add(u);
     }
     if (Array.isArray(data.upgradeIds)) for (const id of data.upgradeIds) addById(id);
-    if (data.upgrade) { add({ effects: data.upgrade, visual: null }); applied++; }
-    return applied;
+    if (data.upgrade) { add({ effects: data.upgrade, visual: null }); }
+    return n;
   }
 
+  // FIX A7: спавн по углам / у базы
   buildPlayers(room) {
     const rPlayers = room.players || {};
     const survivorId = room.survivorId;
-    // FIX 4: спавн по углам мира
     const corners = [
       { x: 400, y: 400 },
       { x: WORLD_WIDTH - 400, y: 400 },
@@ -208,26 +240,24 @@ export class Game {
       else if (isSurvivor) { sx = WORLD_WIDTH / 2; sy = WORLD_HEIGHT / 2 + 200; }
       else { const c = corners[ci++ % 4]; sx = c.x; sy = c.y; }
 
-      const opts = {
-        id: pid, name: data.name || 'Игрок',
-        x: sx, y: sy, canvasW: WORLD_WIDTH, canvasH: WORLD_HEIGHT
-      };
+      const opts = { id: pid, name: data.name || 'Игрок', x: sx, y: sy, canvasW: WORLD_WIDTH, canvasH: WORLD_HEIGHT };
       let p;
       if (isSurvivor) {
         p = new Player({ ...opts, role: 'survivor' });
-        p.speed = 170; p.maxSpeed = 170; p.damage = 22; p.attackSpeed = 2.0;
+        p.speed = 170; p.maxSpeed = 170; p.damage = 25; p.attackSpeed = 2.0;
         p.defaultUpgradeIds = ['surv_main_01', 'surv_pas_01'];
       } else {
         const t = this.determineZombieType(pid, room);
         p = createZombie(t, opts);
       }
 
-      // FIX 1: применить сохранённые или стартовые улучшения
       const applied = this.applyUpgradesFromData(p, data);
       if (applied === 0) this.applyStartingUpgrades(p);
 
       if (typeof data.hp === 'number') p.hp = data.hp;
       if (typeof data.alive === 'boolean') p.alive = data.alive;
+      // FIX A8: гарантировать anim
+      if (!p.anim) p.anim = { walkPhase: 0, attackTimer: 0, hurtTimer: 0, deathTimer: 0 };
       p._prevX = p.x; p._prevY = p.y;
       p.refreshVisualLayers();
       this.players.set(pid, p);
@@ -235,17 +265,13 @@ export class Game {
     this.myPlayer = this.players.get(this.uid) || null;
   }
 
-  // FIX 5: гарантировать базу в Firebase
   async ensureBaseInFirebase() {
     const baseRef = ref(db, `rooms/${this.roomId}/base`);
-    const snap = await get(baseRef);
-    if (!snap.exists()) {
+    const snap = await get(baseRef).catch(() => null);
+    if (!snap || !snap.exists()) {
       await update(ref(db, `rooms/${this.roomId}`), {
-        base: {
-          x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2,
-          hp: 1000, maxHp: 1000, alive: true
-        }
-      });
+        base: { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2, hp: 1000, maxHp: 1000, alive: true }
+      }).catch(() => {});
     }
   }
 
@@ -264,7 +290,6 @@ export class Game {
       if (room.state === 'finished') { this.checkWinCondition(); this.stop(); return; }
       if (room.state !== 'playing') return;
 
-      // FIX 6: интерполяция удалённых игроков
       for (const [pid, data] of Object.entries(room.players || {})) {
         let p = this.players.get(pid);
         if (!p) {
@@ -273,13 +298,15 @@ export class Game {
           else p = createZombie(this.determineZombieType(pid, room), base);
           const a = this.applyUpgradesFromData(p, data);
           if (a === 0) this.applyStartingUpgrades(p);
+          if (!p.anim) p.anim = { walkPhase: 0, attackTimer: 0, hurtTimer: 0, deathTimer: 0 };
           p.refreshVisualLayers();
           this.players.set(pid, p);
         }
+        // FIX A5: удалённые игроки — targets для интерполяции
         if (pid !== this.uid && data.pos) {
           p.targetX = data.pos.x;
           p.targetY = data.pos.y;
-          p.targetAngle = data.pos.angle;
+          if (typeof data.pos.angle === 'number') p.targetAngle = data.pos.angle;
         }
         if (typeof data.hp === 'number') p.hp = data.hp;
         if (typeof data.alive === 'boolean') p.alive = data.alive;
@@ -291,7 +318,6 @@ export class Game {
     });
   }
 
-  // FIX 5: победа по базе и таймеру
   checkWinCondition() {
     if (this._winnerReported) return;
     if (!this.roomData || this.roomData.state !== 'playing') return;
@@ -305,9 +331,7 @@ export class Game {
     else if (this.base && this.base.hp <= 0) winner = 'zombies';
     else if (survivor && !survivor.alive) winner = 'zombies';
     else if (zombies.length > 0 && zombies.every(z => !z.alive)) winner = 'survivor';
-    else if (this.roundStartedAt > 0 && performance.now() - this.roundStartedAt >= ROUND_DURATION_MS) {
-      winner = 'survivor';
-    }
+    else if (this.roundStartedAt > 0 && performance.now() - this.roundStartedAt >= ROUND_DURATION_MS) winner = 'survivor';
 
     if (winner) {
       this._winnerReported = true;
@@ -319,10 +343,8 @@ export class Game {
     if (!this.running) return;
     const dt = Math.min(0.05, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
-
     this.update(dt);
     this.render();
-
     if (this.roomData?.state === 'playing' && now - this.lastSync > SYNC_INTERVAL_MS) {
       this.syncMyState();
       this.lastSync = now;
@@ -333,21 +355,21 @@ export class Game {
   update(dt) {
     const now = performance.now();
 
-    // FIX 6: плавная камера
+    // камера lerp
     if (this.myPlayer) {
       const tx = this.myPlayer.x - this.canvas.width / 2;
       const ty = this.myPlayer.y - this.canvas.height / 2;
       this.camera.x += (tx - this.camera.x) * 0.15;
       this.camera.y += (ty - this.camera.y) * 0.15;
-      this.camera.x = clamp(this.camera.x, 0, WORLD_WIDTH - this.canvas.width);
-      this.camera.y = clamp(this.camera.y, 0, WORLD_HEIGHT - this.canvas.height);
+      this.camera.x = clamp(this.camera.x, 0, Math.max(0, WORLD_WIDTH - this.canvas.width));
+      this.camera.y = clamp(this.camera.y, 0, Math.max(0, WORLD_HEIGHT - this.canvas.height));
     }
 
-    // FIX 3: обновить mouseWorld после движения камеры
+    // FIX B5: пересчёт mouseWorld каждый кадр
     this.input.mouseWorldX = this.input.mouseX + this.camera.x;
     this.input.mouseWorldY = this.input.mouseY + this.camera.y;
 
-    // FIX 6: локальный игрок — физика
+    // движение локального игрока
     if (this.myPlayer && this.myPlayer.alive && this.roomData?.state === 'playing') {
       let ix = 0, iy = 0;
       if (this.keys['w'] || this.keys['ц'] || this.keys['arrowup'])    iy -= 1;
@@ -358,36 +380,46 @@ export class Game {
       this.myPlayer.x = clamp(this.myPlayer.x, 0, WORLD_WIDTH);
       this.myPlayer.y = clamp(this.myPlayer.y, 0, WORLD_HEIGHT);
 
-      // FIX 2: walkPhase
       const sp = Math.hypot(this.myPlayer.vx, this.myPlayer.vy);
       if (sp > 5) this.myPlayer.anim.walkPhase += sp * dt * 0.1;
       else this.myPlayer.anim.walkPhase *= 0.9;
     }
 
-    // FIX 2: таймеры анимации у всех
+    // таймеры анимации
     for (const p of this.players.values()) {
       p.anim.attackTimer = Math.max(0, p.anim.attackTimer - dt * 1000);
       p.anim.hurtTimer   = Math.max(0, p.anim.hurtTimer   - dt * 1000);
       p.anim.deathTimer  = Math.max(0, p.anim.deathTimer  - dt * 1000);
     }
 
-    // FIX 6: интерполяция удалённых
+    // интерполяция удалённых
     for (const [pid, p] of this.players) {
       if (pid === this.uid) continue;
       if (typeof p.targetX === 'number') {
         p.x += (p.targetX - p.x) * 0.2;
         p.y += (p.targetY - p.y) * 0.2;
         if (typeof p.targetAngle === 'number') p.angle = lerpAngle(p.angle, p.targetAngle, 0.2);
-        const d = Math.hypot(p.targetX - p.x, p.targetY - p.y);
-        if (d > 3) p.anim.walkPhase += 0.3;
+        if (Math.hypot(p.targetX - p.x, p.targetY - p.y) > 3) p.anim.walkPhase += 0.3;
         else p.anim.walkPhase *= 0.9;
       }
     }
 
-    // FIX 3: кулдаун атаки
+    // FIX B2: кулдаун уменьшается каждый кадр
     this.input.attackCooldown = Math.max(0, this.input.attackCooldown - dt * 1000);
 
-    // FIX 5: автоатака базы зомби
+    // FIX B3: непрерывная стрельба, пока зажата кнопка или Space
+    if (this.myPlayer?.alive && this.roomData?.state === 'playing') {
+      const wantAttack = this.input.isMouseDown || this.keys[' '];
+      if (wantAttack && this.input.attackCooldown <= 0) {
+        this.tryAttack(this.input.isRightDown);
+      }
+    }
+
+    // FIX B4: TTL трассеров
+    for (const tr of this.tracers) tr.ttl -= dt * 1000;
+    this.tracers = this.tracers.filter(tr => tr.ttl > 0);
+
+    // автоатака базы зомби
     for (const p of this.players.values()) {
       if (p.id === this.roomData?.survivorId) continue;
       if (!p.alive) continue;
@@ -398,40 +430,44 @@ export class Game {
           p.triggerAttack();
           this.damageBase(p.damage * 0.4);
         }
-      } else if (p === this.myPlayer && !this.myPlayer.targetPlayer) {
-        // Локальный зомби движется к базе, если не атакует игрока
-        // (управление движением — через WASD, здесь только подсказка)
       }
     }
 
     this.checkWinCondition();
   }
 
-  // FIX 3: попытка атаки
+  // FIX B3-B7: атака с актуальной целью и трассером
   tryAttack(isSecondary) {
     const me = this.myPlayer;
-    if (!me || !me.alive || this.roomData?.state !== 'playing') return;
+    if (!me || !me.alive) return;
+    if (this.roomData?.state !== 'playing') return;
     if (this.input.attackCooldown > 0) return;
+    if (isSecondary && !me.visualParts?.length) return; // нет secondary
 
-    // Направление на мышь
+    // FIX B5: актуальные мировые координаты мыши
+    this.input.mouseWorldX = this.input.mouseX + this.camera.x;
+    this.input.mouseWorldY = this.input.mouseY + this.camera.y;
+
     const dx = this.input.mouseWorldX - me.x;
     const dy = this.input.mouseWorldY - me.y;
     const ang = Math.atan2(dy, dx);
     me.angle = ang;
     me.triggerAttack();
 
-    const speed = me.attackSpeed || 1;
-    this.input.attackCooldown = 1000 / speed;
+    this.input.attackCooldown = 1000 / (me.attackSpeed || 1);
 
-    // FIX 3: hit-scan по ролям
     if (me.role === 'survivor') {
-      this.hitscanRay(me, ang, 600, 20);
+      // FIX B4/B5: hitscan + трассер
+      const range = 600;
+      const endX = me.x + Math.cos(ang) * range;
+      const endY = me.y + Math.sin(ang) * range;
+      this.tracers.push({ x1: me.x, y1: me.y - 15, x2: endX, y2: endY - 15, ttl: 60, color: '#fbbf24' });
+      this.hitscanRay(me, ang, range, 20);
     } else if (me.role === 'zombie_attacker') {
       this.hitscanCone(me, ang, 40, Math.PI / 3, 1.0);
     } else if (me.role === 'zombie_tank') {
       this.hitscanCone(me, ang, 50, Math.PI / 2, 1.0);
     } else if (me.role === 'zombie_support') {
-      // Лечим союзника под курсором или слабый удар по врагу
       let healed = false;
       for (const p of this.players.values()) {
         if (p.id === me.id || p.id === this.roomData.survivorId || !p.alive) continue;
@@ -450,9 +486,8 @@ export class Game {
     const dx = Math.cos(ang), dy = Math.sin(ang);
     for (const t of this.players.values()) {
       if (t.id === me.id || !t.alive) continue;
-      const isTargetEnemy = (me.id === this.roomData.survivorId) !== (t.id === this.roomData.survivorId);
-      if (!isTargetEnemy) continue;
-      // Проекция на луч
+      const isEnemy = (me.id === this.roomData.survivorId) !== (t.id === this.roomData.survivorId);
+      if (!isEnemy) continue;
       const px = t.x - me.x, py = t.y - me.y;
       const proj = px * dx + py * dy;
       if (proj < 0 || proj > length) continue;
@@ -467,8 +502,8 @@ export class Game {
   hitscanCone(me, ang, radius, halfAngle, mult = 1.0) {
     for (const t of this.players.values()) {
       if (t.id === me.id || !t.alive) continue;
-      const isTargetEnemy = (me.id === this.roomData.survivorId) !== (t.id === this.roomData.survivorId);
-      if (!isTargetEnemy) continue;
+      const isEnemy = (me.id === this.roomData.survivorId) !== (t.id === this.roomData.survivorId);
+      if (!isEnemy) continue;
       const dx = t.x - me.x, dy = t.y - me.y;
       const dist = Math.hypot(dx, dy);
       if (dist > radius + 20) continue;
@@ -483,10 +518,7 @@ export class Game {
 
   damageBase(amount) {
     const newHp = Math.max(0, (this.base.hp || 1000) - amount);
-    update(ref(db, `rooms/${this.roomId}/base`), {
-      hp: Math.round(newHp),
-      alive: newHp > 0
-    }).catch(() => {});
+    update(ref(db, `rooms/${this.roomId}/base`), { hp: Math.round(newHp), alive: newHp > 0 }).catch(() => {});
   }
 
   syncMyState() {
@@ -503,12 +535,12 @@ export class Game {
   }
 
   syncPlayer(p) {
+    // FIX B9: синхронизация HP
     update(ref(db, `rooms/${this.roomId}/players/${p.id}`), {
       hp: Math.round(p.hp), alive: p.alive
     }).catch(() => {});
   }
 
-  // FIX 4: рендер видимых тайлов
   renderTiles() {
     const ctx = this.ctx;
     const cx0 = Math.floor(this.camera.x / TILE);
@@ -519,10 +551,9 @@ export class Game {
       for (let tx = cx0; tx <= cx1; tx++) {
         const wx = tx * TILE, wy = ty * TILE;
         const n = ((tx * 73856093) ^ (ty * 19349663)) >>> 0;
-        const shade = (n % 3);
+        const shade = n % 3;
         ctx.fillStyle = shade === 0 ? '#1a2f1a' : shade === 1 ? '#1f291f' : '#162016';
         ctx.fillRect(wx, wy, TILE, TILE);
-        // Трещины
         if (n % 7 === 0) {
           ctx.strokeStyle = '#0f1a0f'; ctx.lineWidth = 1;
           ctx.beginPath();
@@ -531,33 +562,26 @@ export class Game {
           ctx.lineTo(wx + 140, wy + 60);
           ctx.stroke();
         }
-        // Травинки
         if (n % 5 === 0) {
           ctx.fillStyle = '#2d4a2d';
-          for (let i = 0; i < 3; i++) {
-            ctx.fillRect(wx + (i * 37 + n) % TILE, wy + (i * 53 + n) % TILE, 3, 6);
-          }
+          for (let i = 0; i < 3; i++) ctx.fillRect(wx + (i * 37 + n) % TILE, wy + (i * 53 + n) % TILE, 3, 6);
         }
       }
     }
   }
 
-  // FIX 4: мини-карта
   renderMinimap() {
     const ctx = this.ctx;
     const mw = 200, mh = 150, mx = 10, my = 10;
     ctx.save();
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(mx, my, mw, mh);
-    ctx.strokeStyle = '#444'; ctx.lineWidth = 1;
-    ctx.strokeRect(mx, my, mw, mh);
+    ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.strokeRect(mx, my, mw, mh);
     const sx = mw / WORLD_WIDTH, sy = mh / WORLD_HEIGHT;
-    // База
     if (this.base) {
       ctx.fillStyle = '#3b82f6';
       ctx.fillRect(mx + this.base.x * sx - 3, my + this.base.y * sy - 3, 6, 6);
     }
-    // Игроки
     for (const p of this.players.values()) {
       if (!p.alive) continue;
       let col = '#ef4444';
@@ -571,47 +595,59 @@ export class Game {
     ctx.restore();
   }
 
+  // FIX A4: порядок рендера
   render() {
     const ctx = this.ctx;
     if (!ctx) return;
     const now = performance.now();
     const tSec = (now - this.startTime) / 1000;
 
-    // Фон
+    // FIX A9: очистка canvas по его реальным размерам
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     ctx.fillStyle = '#0a0a0f';
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-    // FIX 6: трансформ камеры
+    // FIX A1: единственный translate камеры — здесь
     ctx.save();
     ctx.translate(-this.camera.x, -this.camera.y);
 
-    // FIX 4: тайлы
     this.renderTiles();
-
-    // FIX 5: база ДО игроков
     if (this.base) drawBase(ctx, this.base, now);
 
-    // Игроки
+    // FIX A6: игроки рисуются по мировым координатам
     for (const p of this.players.values()) {
-      if (p.alive || p.anim.deathTimer > 0) {
-        const state = {
-          t: tSec,
-          isLocal: p.id === this.uid,
-          isAttacking: p.anim.attackTimer > 0,
-          isMoving: (() => {
-            if (p.id === this.uid) return Math.hypot(p.vx || 0, p.vy || 0) > 5;
-            return Math.hypot((p.targetX || 0) - p.x, (p.targetY || 0) - p.y) > 2;
-          })()
-        };
-        drawPlayer(ctx, p, now, state);
-      }
+      if (!p.alive && !(p.anim.deathTimer > 0)) continue;
+
+      let isMoving = false;
+      if (p.id === this.uid) isMoving = Math.hypot(p.vx || 0, p.vy || 0) > 5;
+      else isMoving = Math.hypot((p.targetX || 0) - p.x, (p.targetY || 0) - p.y) > 2;
+
+      const state = {
+        t: tSec,
+        isLocal: p.id === this.uid,
+        isAttacking: (p.anim?.attackTimer || 0) > 0,
+        isMoving
+      };
+      // FIX A8: защита от исключений в рендере одного игрока
+      try { drawPlayer(ctx, p, now, state); }
+      catch (err) { console.error('[render] player error:', p.id, err); }
     }
+
+    // FIX B4: трассеры
+    for (const tr of this.tracers) {
+      ctx.strokeStyle = `rgba(251,191,36,${Math.min(1, tr.ttl / 60)})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(tr.x1, tr.y1);
+      ctx.lineTo(tr.x2, tr.y2);
+      ctx.stroke();
+    }
+
     ctx.restore();
 
-    // FIX 4: мини-карта
+    // HUD в экранных координатах
     this.renderMinimap();
 
-    // HUD
     if (this.myPlayer) {
       const me = this.myPlayer;
       const roleLabel = me.role === 'survivor' ? 'Выживший' :
@@ -619,9 +655,7 @@ export class Game {
         me.role === 'zombie_attacker' ? 'Атакующий' :
         me.role === 'zombie_support' ? 'Помогающий' : me.role;
       const baseHp = Math.round(this.base?.hp ?? 1000);
-      setGameStatus(
-        `${roleLabel} | HP: ${Math.round(me.hp)}/${Math.round(me.maxHp)} | База: ${baseHp} | ЛКМ/ПКМ/space — атака`
-      );
+      setGameStatus(`${roleLabel} | HP: ${Math.round(me.hp)}/${Math.round(me.maxHp)} | База: ${baseHp} | ЛКМ/Space — атака`);
     }
   }
 }

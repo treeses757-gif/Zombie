@@ -1,5 +1,6 @@
-// FIX 2: анимации (idle/walk/attack/hurt/death)
-// FIX 5: drawBase с башней, мешками, HP-баром
+// js/spriteSystem.js
+// FIX A1: drawAnimatedBody делает ctx.translate(p.x, p.y) — база в мировых координатах.
+// FIX 2: анимации. FIX 5: drawBase.
 export const PART_RENDERERS = {};
 
 const rad = (ctx, x, y, r, c0, c1) => { const g = ctx.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, c0); g.addColorStop(1, c1); return g; };
@@ -28,36 +29,32 @@ export const lerpColor = (a, b, t) => {
 };
 export const drawGlow = (ctx, x, y, r, color) => { ctx.fillStyle = rad(ctx, x, y, r, color, 'transparent'); ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); };
 
-// ============ FIX 2: Анимированные базовые тела ============
-// Тела рисуются вокруг (0,0), трансформ уже применён в drawPlayer
+// ============ FIX A1: drawAnimatedBody переносит базу в (p.x, p.y) ============
 function drawAnimatedBody(ctx, p, time, baseDrawFn) {
   const a = p.anim || { walkPhase: 0, attackTimer: 0, hurtTimer: 0, deathTimer: 0 };
   const isDead = !p.alive;
   const wp = a.walkPhase || 0;
   const spd = Math.hypot(p.vx || 0, p.vy || 0);
-  const walking = spd > 5 || (a._remoteWalking && a._remoteWalking > 0);
+  const walking = spd > 5;
 
-  // Idle bob
   const idleBob = Math.sin(time * 0.003) * 1.5;
-  // Walk
   const legSwing = walking ? Math.sin(wp) * 4 : 0;
   const bodyTilt = walking ? Math.sin(wp * 2) * 0.05 : 0;
-  // Attack lunge
   let lunge = 0;
   if (a.attackTimer > 0) {
     const prog = 1 - a.attackTimer / 150;
     lunge = prog < 0.4 ? -prog * 8 : (prog - 0.4) * 15;
   }
-  // Hurt shake
   const hurtShake = a.hurtTimer > 0 ? Math.sin(time * 0.05) * 3 : 0;
 
   ctx.save();
-  // Death: падение на бок
+  // ⬇⬇⬇ ГЛАВНЫЙ ФИКС: база в мировых координатах ⬇⬇⬇
+  ctx.translate(p.x, p.y);
+
   if (isDead && a.deathTimer > 0) {
     ctx.globalAlpha = Math.max(0.3, a.deathTimer / 500);
     ctx.rotate((1 - a.deathTimer / 500) * Math.PI / 2);
   }
-  // FIX 2: общий трансформ тела
   ctx.translate(
     Math.cos(p.angle || 0) * lunge + hurtShake,
     idleBob + Math.sin(p.angle || 0) * lunge
@@ -66,7 +63,6 @@ function drawAnimatedBody(ctx, p, time, baseDrawFn) {
   baseDrawFn({ legSwing, walking, attackTimer: a.attackTimer });
   ctx.restore();
 
-  // Hurt overlay
   if (a.hurtTimer > 0) {
     ctx.save();
     ctx.globalAlpha = (a.hurtTimer / 200) * 0.5;
@@ -76,47 +72,36 @@ function drawAnimatedBody(ctx, p, time, baseDrawFn) {
   }
 }
 
-// ============ Базовые тела (процедурные, анимированные) ============
+// ============ Базовые тела ============
 function drawSurvivorBase(ctx, p, time) {
-  drawAnimatedBody(ctx, p, time, ({ legSwing, walking }) => {
-    // Тень
+  drawAnimatedBody(ctx, p, time, ({ legSwing }) => {
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     ctx.beginPath(); ctx.ellipse(0, 22, 14, 4, 0, 0, Math.PI * 2); ctx.fill();
-    // Ноги (анимированные)
     ctx.fillStyle = '#111827';
     ctx.fillRect(-7 + legSwing, 12, 5, 14);
     ctx.fillRect(2 - legSwing, 12, 5, 14);
-    // Ботинки
     ctx.fillStyle = '#0f172a';
     ctx.fillRect(-8 + legSwing, 24, 7, 4);
     ctx.fillRect(1 - legSwing, 24, 7, 4);
-    // Торс
     ctx.fillStyle = lin(ctx, -10, -8, 10, 16, '#2563eb', '#0f172a');
     rr(ctx, -9, -8, 18, 24, 4); ctx.fill();
-    // Куртка (молния)
     line(ctx, 0, -8, 0, 16, '#1e3a8a', 1);
-    // Руки
     ctx.fillStyle = '#1e3a8a';
     ctx.fillRect(-11, -6, 4, 16);
     ctx.fillRect(7, -6, 4, 16);
-    // Голова
     ctx.fillStyle = rad(ctx, 0, -18, 8, '#fde4c4', '#d4a574');
     ctx.beginPath(); ctx.arc(0, -18, 7, 0, Math.PI * 2); ctx.fill();
-    // Волосы
     ctx.fillStyle = '#4a2f1a';
     ctx.beginPath(); ctx.arc(0, -20, 7, Math.PI, 0); ctx.fill();
-    // Глаз
     const ex = Math.cos(p.angle || 0) * 2;
     const ey = Math.sin(p.angle || 0) * 2;
     ctx.fillStyle = '#111';
     ctx.beginPath(); ctx.arc(ex, -18 + ey, 1.4, 0, Math.PI * 2); ctx.fill();
-    // Пистолет в руке
     ctx.save();
     ctx.translate(9, 2);
     ctx.rotate(p.angle || 0);
     ctx.fillStyle = '#333'; ctx.fillRect(0, -2, 10, 4);
     ctx.fillStyle = '#555'; ctx.fillRect(0, -2, 4, 5);
-    // Muzzle flash при атаке
     if (p.anim && p.anim.attackTimer > 100) {
       const f = 0.7 + Math.sin(time * 0.04) * 0.3;
       ctx.fillStyle = `rgba(250,204,21,${f})`;
@@ -130,28 +115,22 @@ function drawAttackerBase(ctx, p, time) {
   drawAnimatedBody(ctx, p, time, ({ legSwing }) => {
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     ctx.beginPath(); ctx.ellipse(0, 20, 12, 4, 0, 0, Math.PI * 2); ctx.fill();
-    // Ноги
     ctx.fillStyle = '#0f5132';
     ctx.fillRect(-6 + legSwing, 10, 5, 13);
     ctx.fillRect(2 - legSwing, 10, 5, 13);
-    // Торс сутулый
     ctx.fillStyle = lin(ctx, -8, -6, 8, 14, '#4d7c0f', '#14532d');
     rr(ctx, -7, -6, 14, 22, 3); ctx.fill();
-    // Голова
     ctx.fillStyle = rad(ctx, 0, -14, 7, '#65a30d', '#365314');
     ctx.beginPath(); ctx.arc(0, -14, 6.5, 0, Math.PI * 2); ctx.fill();
-    // Когти (атака — вытягиваются)
     const atk = p.anim && p.anim.attackTimer > 0 ? 4 : 0;
     ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 1.5;
     for (let i = 0; i < 3; i++) {
       line(ctx, -9, -2 + i * 2, -14 - atk, -3 + i * 3, '#fbbf24', 1.5);
       line(ctx, 9, -2 + i * 2, 14 + atk, -3 + i * 3, '#fbbf24', 1.5);
     }
-    // Глаза
     const ex = Math.cos(p.angle || 0) * 2, ey = Math.sin(p.angle || 0) * 2;
     ctx.fillStyle = '#ff3030';
     ctx.beginPath(); ctx.arc(ex, -14 + ey, 1.5, 0, Math.PI * 2); ctx.fill();
-    // Вспышка при атаке
     if (atk > 0) {
       ctx.fillStyle = 'rgba(239,68,68,0.5)';
       circle(ctx, 0, 0, 20);
@@ -163,25 +142,19 @@ function drawTankBase(ctx, p, time) {
   drawAnimatedBody(ctx, p, time, ({ legSwing }) => {
     ctx.fillStyle = 'rgba(0,0,0,0.4)';
     ctx.beginPath(); ctx.ellipse(0, 28, 20, 5, 0, 0, Math.PI * 2); ctx.fill();
-    // Ноги
     ctx.fillStyle = '#3f3f46';
     ctx.fillRect(-10 + legSwing * 0.5, 12, 8, 16);
     ctx.fillRect(2 - legSwing * 0.5, 12, 8, 16);
-    // Торс
     ctx.fillStyle = lin(ctx, -16, -12, 16, 20, '#71717a', '#27272a');
     rr(ctx, -15, -12, 30, 28, 5); ctx.fill();
-    // Плечи
     ctx.fillStyle = '#52525b';
     ctx.beginPath(); ctx.arc(-13, -8, 7, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.arc(13, -8, 7, 0, Math.PI * 2); ctx.fill();
-    // Голова
     ctx.fillStyle = rad(ctx, 0, -22, 10, '#a1a1aa', '#3f3f46');
     ctx.beginPath(); ctx.arc(0, -22, 9, 0, Math.PI * 2); ctx.fill();
-    // Глаза
     ctx.fillStyle = '#fbbf24';
     ctx.beginPath(); ctx.arc(-3, -22, 1.5, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.arc(3, -22, 1.5, 0, Math.PI * 2); ctx.fill();
-    // Щит
     ctx.fillStyle = '#52525b';
     ctx.strokeStyle = '#18181b'; ctx.lineWidth = 2;
     rr(ctx, -26, -8, 10, 24, 3); ctx.fill(); ctx.stroke();
@@ -192,28 +165,24 @@ function drawSupportBase(ctx, p, time) {
   drawAnimatedBody(ctx, p, time, ({ legSwing }) => {
     ctx.fillStyle = 'rgba(0,0,0,0.3)';
     ctx.beginPath(); ctx.ellipse(0, 18, 11, 3, 0, 0, Math.PI * 2); ctx.fill();
-    // Мантия
     ctx.fillStyle = lin(ctx, -10, -6, 10, 16, '#7c3aed', '#4c1d95');
     poly(ctx, [[-9 + legSwing * 0.3, 16], [9 - legSwing * 0.3, 16], [7, -6], [-7, -6]]); ctx.fill();
-    // Голова
     ctx.fillStyle = rad(ctx, 0, -16, 7, '#a78bfa', '#6d28d9');
     ctx.beginPath(); ctx.arc(0, -16, 6.5, 0, Math.PI * 2); ctx.fill();
-    // Кристалл (пульсирует)
     const f = 0.6 + Math.sin(time * 0.008) * 0.4;
     ctx.save(); ctx.translate(9, 2);
     ctx.fillStyle = rad(ctx, 0, 0, 6, `rgba(74,222,128,${f})`, '#14532d');
     poly(ctx, [[0, -6], [4, 0], [0, 6], [-4, 0]]); ctx.fill();
     ctx.strokeStyle = '#86efac'; ctx.lineWidth = 1; ctx.stroke();
     ctx.restore();
-    // Глаза
     ctx.fillStyle = '#22d3ee';
     ctx.beginPath(); ctx.arc(-2, -16, 1.4, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.arc(2, -16, 1.4, 0, Math.PI * 2); ctx.fill();
   });
 }
 
-// ============ 120 рендереров (компактно) ============
-// ВЫЖИВШИЙ
+// ============ 120 РЕНДЕРЕРОВ ============
+// ВЫЖИВШИЙ (30)
 PART_RENDERERS["hat_01"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x, p.y - 22); ctx.fillStyle = lin(ctx, -9, -4, 9, 4, '#78350f', '#1c0a00'); rr(ctx, -9, -4, 18, 8, 2); ctx.fill(); ctx.fillStyle = '#451a03'; rr(ctx, -11, 2, 22, 2, 1); ctx.fill(); ctx.restore(); };
 PART_RENDERERS["torso_jacket"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = lin(ctx, -10, -8, 10, 16, '#7c2d12', '#431407'); rr(ctx, -10, -8, 20, 24, 4); ctx.fill(); line(ctx, -8, -6, 0, 10, '#1c0a00', 1); line(ctx, 8, -6, 0, 10, '#1c0a00', 1); ctx.restore(); };
 PART_RENDERERS["boots_sprint"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x, p.y); const g = 0.5 + Math.sin(t * 0.005) * 0.3; ctx.fillStyle = `rgba(59,130,246,${g})`; ctx.fillRect(-8, 24, 6, 6); ctx.fillRect(2, 24, 6, 6); ctx.restore(); };
@@ -245,7 +214,7 @@ PART_RENDERERS["crit_flash"] = (ctx, p, t, s) => { if (!s?.isAttacking) return; 
 PART_RENDERERS["rocket_signal"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x - 10, p.y - 20 - (t * 0.03) % 60); ctx.fillStyle = '#dc2626'; poly(ctx, [[0, -10], [5, 0], [3, 8], [-3, 8], [-5, 0]]); ctx.fill(); const f = 0.5 + Math.sin(t * 0.03) * 0.5; ctx.fillStyle = `rgba(251,146,60,${f})`; poly(ctx, [[-3, 8], [3, 8], [0, 20]]); ctx.fill(); ctx.restore(); };
 PART_RENDERERS["freeze_tint"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = 'rgba(96,165,250,0.18)'; circle(ctx, 0, 0, 22); ctx.strokeStyle = 'rgba(191,219,254,0.5)'; ctx.lineWidth = 1; for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2 + t * 0.001; line(ctx, Math.cos(a) * 15, Math.sin(a) * 15, Math.cos(a) * 20, Math.sin(a) * 20, 'rgba(191,219,254,0.5)', 1); } ctx.restore(); };
 
-// АТАКУЮЩИЙ
+// АТАКУЮЩИЙ (30)
 PART_RENDERERS["claws_sharp"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y); for (let i = 0; i < 3; i++) { line(ctx, -9, -2 + i * 2, -18, -4 + i * 3, '#f3f4f6', 2); line(ctx, 9, -2 + i * 2, 18, -4 + i * 3, '#f3f4f6', 2); } ctx.restore(); };
 PART_RENDERERS["claws_bloody"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x, p.y); for (let i = 0; i < 3; i++) { line(ctx, -9, -2 + i * 2, -18, -4 + i * 3, '#7f1d1d', 2); line(ctx, 9, -2 + i * 2, 18, -4 + i * 3, '#7f1d1d', 2); } ctx.fillStyle = 'rgba(220,38,38,0.9)'; for (let i = 0; i < 4; i++) { const y = (t * 0.04 + i * 30) % 40; circle(ctx, -16, 6 + y * 0.5, 1.5); } ctx.restore(); };
 PART_RENDERERS["claws_poison"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x, p.y); for (let i = 0; i < 3; i++) { line(ctx, -9, -2 + i * 2, -18, -4 + i * 3, '#4ade80', 2); line(ctx, 9, -2 + i * 2, 18, -4 + i * 3, '#4ade80', 2); } const f = 0.5 + Math.sin(t * 0.01) * 0.5; ctx.fillStyle = `rgba(74,222,128,${f})`; circle(ctx, -16, 8, 2); circle(ctx, 16, 8, 2); ctx.restore(); };
@@ -277,7 +246,7 @@ PART_RENDERERS["aura_revive_green"] = (ctx, p, t) => { if (p.alive) return; aura
 PART_RENDERERS["bone_counter"] = (ctx, p) => { ctx.save(); ctx.translate(p.x - 12, p.y + 8); ctx.fillStyle = '#fafaf9'; for (let i = 0; i < 3; i++) ctx.fillRect(-1 + i * 4, -1, 2, 5); ctx.restore(); };
 PART_RENDERERS["headband_red"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y - 20); ctx.fillStyle = '#dc2626'; rr(ctx, -8, -2, 16, 3, 1); ctx.fill(); line(ctx, 8, -1, 14, -3, '#dc2626', 2); ctx.restore(); };
 
-// ТАНК
+// ТАНК (30)
 PART_RENDERERS["shield_bigger"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = lin(ctx, -30, -12, -18, 20, '#78716c', '#27272a'); ctx.strokeStyle = '#18181b'; ctx.lineWidth = 2; rr(ctx, -32, -14, 14, 34, 4); ctx.fill(); ctx.stroke(); ctx.restore(); };
 PART_RENDERERS["shield_spiked"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = '#52525b'; rr(ctx, -26, -8, 10, 24, 3); ctx.fill(); ctx.fillStyle = '#a8a29e'; for (let i = 0; i < 4; i++) { poly(ctx, [[-26, -6 + i * 6], [-34, -4 + i * 6], [-26, -2 + i * 6]]); ctx.fill(); } ctx.restore(); };
 PART_RENDERERS["plates_bone"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = '#f5f5f4'; ctx.strokeStyle = '#a8a29e'; ctx.lineWidth = 1; for (let i = 0; i < 3; i++) { rr(ctx, -12 + i * 2, -8 + i * 6, 24 - i * 4, 5, 2); ctx.fill(); ctx.stroke(); } ctx.restore(); };
@@ -309,7 +278,7 @@ PART_RENDERERS["body_heavy_lean"] = (ctx, p) => { ctx.save(); ctx.translate(p.x,
 PART_RENDERERS["shield_repair"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x - 21, p.y); const f = 0.5 + Math.sin(t * 0.006) * 0.5; ctx.strokeStyle = `rgba(74,222,128,${f})`; ctx.lineWidth = 2; rr(ctx, -6, -12, 12, 24, 3); ctx.stroke(); line(ctx, -3, -8, 3, -2, `rgba(74,222,128,${f})`, 2); ctx.restore(); };
 PART_RENDERERS["body_massive"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = 'rgba(82,82,91,0.35)'; rr(ctx, -19, -16, 38, 34, 7); ctx.fill(); ctx.restore(); };
 
-// ПОМОГАЮЩИЙ
+// ПОМОГАЮЩИЙ (30)
 PART_RENDERERS["crystal_green_hand"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x + 12, p.y + 2); const f = 0.6 + Math.sin(t * 0.008) * 0.4; ctx.shadowColor = '#4ade80'; ctx.shadowBlur = 10; ctx.fillStyle = `rgba(74,222,128,${f})`; poly(ctx, [[0, -8], [5, 0], [0, 8], [-5, 0]]); ctx.fill(); ctx.shadowBlur = 0; ctx.restore(); };
 PART_RENDERERS["threads_green_ally"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x, p.y); for (let i = 0; i < 5; i++) { const a = (i / 5) * Math.PI * 2 + Math.sin(t * 0.002) * 0.3; ctx.strokeStyle = 'rgba(74,222,128,0.5)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(Math.cos(a) * 20, Math.sin(a) * 20 + 5, Math.cos(a) * 50, Math.sin(a) * 50); ctx.stroke(); } ctx.restore(); };
 PART_RENDERERS["fog_green_poison"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x, p.y + 10); for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2 + t * 0.001; ctx.fillStyle = `rgba(74,222,128,${0.15 + Math.sin(t * 0.005 + i) * 0.05})`; circle(ctx, Math.cos(a) * 25, Math.sin(a) * 15, 22); } ctx.restore(); };
@@ -346,18 +315,15 @@ export function drawBase(ctx, base, time) {
   if (!base) return;
   ctx.save();
   ctx.translate(base.x, base.y);
-  // Тень
   ctx.fillStyle = 'rgba(0,0,0,0.4)';
   ctx.beginPath(); ctx.ellipse(0, 70, 100, 25, 0, 0, Math.PI * 2); ctx.fill();
 
-  // Основной бетонный блок 120×120
   const destroyed = base.hp <= 0;
   ctx.fillStyle = destroyed ? '#3f3f46' : lin(ctx, -60, -60, 60, 60, '#a8a29e', '#57534e');
   ctx.fillRect(-60, -60, 120, 120);
   ctx.strokeStyle = '#1c1917'; ctx.lineWidth = 3;
   ctx.strokeRect(-60, -60, 120, 120);
 
-  // Трещины
   ctx.strokeStyle = 'rgba(24,24,27,0.7)'; ctx.lineWidth = 1.5;
   for (let i = 0; i < 5; i++) {
     const n = (i * 73856093) & 0x7fffffff;
@@ -367,17 +333,14 @@ export function drawBase(ctx, base, time) {
     ctx.stroke();
   }
 
-  // Вышка с прожектором
   ctx.fillStyle = '#292524';
   ctx.fillRect(-12, -110, 24, 55);
   ctx.fillStyle = '#44403c';
   ctx.fillRect(-18, -112, 36, 6);
-  // Прожектор (вращается)
   const ang = time * 0.001;
   ctx.save(); ctx.translate(0, -95); ctx.rotate(ang);
   ctx.fillStyle = '#fef3c7';
   ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI * 2); ctx.fill();
-  // Конус света
   const g = ctx.createLinearGradient(0, 0, 100, 0);
   g.addColorStop(0, 'rgba(254,243,199,0.35)');
   g.addColorStop(1, 'rgba(254,243,199,0)');
@@ -385,7 +348,6 @@ export function drawBase(ctx, base, time) {
   poly(ctx, [[5, -4], [100, -40], [100, 40], [5, 4]]); ctx.fill();
   ctx.restore();
 
-  // Мешки с песком по периметру
   ctx.fillStyle = '#a8a29e';
   ctx.strokeStyle = '#57534e'; ctx.lineWidth = 1;
   for (let i = 0; i < 8; i++) {
@@ -394,7 +356,6 @@ export function drawBase(ctx, base, time) {
     rr(ctx, x - 10, y - 6, 20, 12, 3); ctx.fill(); ctx.stroke();
   }
 
-  // HP-бар над базой
   const pct = Math.max(0, Math.min(1, base.hp / base.maxHp));
   const barW = 100, barH = 8;
   ctx.fillStyle = 'rgba(0,0,0,0.7)';
@@ -407,7 +368,6 @@ export function drawBase(ctx, base, time) {
   ctx.fillStyle = '#fff'; ctx.font = '11px monospace'; ctx.textAlign = 'center';
   ctx.fillText(`${Math.round(base.hp)}/${base.maxHp}`, 0, -134);
 
-  // Разрушено — огонь и дым
   if (destroyed) {
     for (let i = 0; i < 4; i++) {
       const t0 = (time * 0.002 + i * 0.25) % 1;
@@ -439,7 +399,6 @@ export function getPartsForPlayer(player) {
 
 export function drawPlayer(ctx, player, time, state = {}) {
   if (!player) return;
-  // 1. База
   switch (player.role) {
     case 'survivor':        drawSurvivorBase(ctx, player, time); break;
     case 'zombie_attacker': drawAttackerBase(ctx, player, time); break;
@@ -447,13 +406,12 @@ export function drawPlayer(ctx, player, time, state = {}) {
     case 'zombie_support':  drawSupportBase(ctx, player, time); break;
     default:                drawSurvivorBase(ctx, player, time);
   }
-  // 2. Слои улучшений — рисуются вокруг player.x/y (части двигаются вместе с телом через анимацию тела)
   const parts = getPartsForPlayer(player);
   for (const { part } of parts) {
     const fn = PART_RENDERERS[part];
     if (fn) {
       ctx.save();
-      try { fn(ctx, player, time, state); } catch (e) { /* защита */ }
+      try { fn(ctx, player, time, state); } catch (e) { console.error('[PART]', part, e); }
       ctx.restore();
     }
   }

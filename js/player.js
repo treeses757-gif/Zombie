@@ -1,4 +1,5 @@
-// Базовый класс игрока. FIX 1 (applyUpgrade + стартовые upgrades), FIX 2 (анимация), FIX 6 (плавное движение).
+// js/player.js
+// Базовый класс игрока. FIX 1 (applyUpgrade + стартовые upgrades), FIX 2 (анимация), FIX 6 (плавное движение), FIX B7-B8 (damage, takeDamage).
 export class Player {
   constructor({
     id, name = 'Игрок', x = 0, y = 0,
@@ -10,7 +11,9 @@ export class Player {
     this.name = name;
     this.x = x; this.y = y;
     this.hp = hp; this.maxHp = maxHp;
-    this.speed = speed; this.damage = damage;
+    this.speed = speed;
+    // FIX B7: damage никогда не 0/undefined
+    this.damage = typeof damage === 'number' && damage > 0 ? damage : 25;
     this.role = role;
     this.upgrade = upgrade;
     this.canvasW = canvasW; this.canvasH = canvasH;
@@ -25,8 +28,8 @@ export class Player {
     this.maxSpeed = speed;
     this.friction = 0.85;
 
-    // FIX 3: скорость атаки (ударов/выстрелов в секунду)
-    this.attackSpeed = 1.0;
+    // FIX B7: скорость атаки (ударов/выстрелов в секунду)
+    this.attackSpeed = 2.0;
 
     // FIX 2: анимация
     this.anim = { walkPhase: 0, attackTimer: 0, hurtTimer: 0, deathTimer: 0 };
@@ -35,9 +38,9 @@ export class Player {
     this.upgrades = Array.isArray(upgrades) ? upgrades.slice() : [];
     this.visualParts = [];
     this.visualLayers = [];
-    this.defaultUpgradeIds = []; // заполняется в наследниках
+    this.defaultUpgradeIds = [];
 
-    if (upgrade) this.applyUpgrade(upgrade); // старый числовой формат
+    if (upgrade) this.applyUpgrade(upgrade);
     this.refreshVisualLayers();
   }
 
@@ -49,7 +52,6 @@ export class Player {
       this.vx += nx * this.acceleration * dt;
       this.vy += ny * this.acceleration * dt;
     } else {
-      // FIX 6: трение
       const f = Math.pow(this.friction, dt * 60);
       this.vx *= f; this.vy *= f;
     }
@@ -68,7 +70,7 @@ export class Player {
     this.anim.attackTimer = 150;
   }
 
-  // FIX 2: урон + hurt-анимация
+  // FIX B8: урон с защитой от повторной смерти
   takeDamage(amount) {
     if (!this.alive) return false;
     this.hp = Math.max(0, this.hp - amount);
@@ -88,19 +90,11 @@ export class Player {
     return this.hp - before;
   }
 
-  // FIX 1: применение улучшения (эффекты в процентах, абсолютный HP)
+  // FIX 1: применение улучшения
   applyUpgrade(upgrade) {
     if (!upgrade) return;
-
-    // Старый формат: { hp: 0.1, speed: -0.05, damage: 0 } — доли
-    if (upgrade.hp === undefined && upgrade.speed === undefined &&
-        upgrade.damage === undefined && (upgrade.parsed || upgrade.hp === 0)) {
-      // нет effects — пропускаем
-    }
-
     const e = upgrade.effects || {};
 
-    // Абсолютный HP (у эффектов upgrade.effects.hp — число, не процент)
     if (typeof e.hp === 'number') {
       this.maxHp += e.hp;
       this.hp = Math.min(this.maxHp, this.hp + Math.max(0, e.hp));
@@ -115,27 +109,22 @@ export class Player {
       this.attackSpeed *= (1 + e.attackSpeed / 100);
     }
 
-    // Старый формат: numeric-поля в корне (для совместимости)
     if (upgrade.parsed) {
       const p = upgrade.parsed;
-      if (p.hp)     { this.maxHp = Math.max(10, this.maxHp + this.maxHp * p.hp); }
+      if (p.hp)     this.maxHp += this.maxHp * p.hp;
       if (p.speed)  this.speed *= (1 + p.speed);
       if (p.damage) this.damage *= (1 + p.damage);
     }
 
-    // FIX 6: пересчитать maxSpeed после изменения speed
     this.maxSpeed = this.speed;
 
-    // FIX 1: визуальная часть
     if (upgrade.visual && upgrade.visual.part) {
       if (!this.visualParts.includes(upgrade.visual.part)) {
         this.visualParts.push(upgrade.visual.part);
       }
     }
-    // Запоминаем в общем списке
     if (!this.upgrades.includes(upgrade)) this.upgrades.push(upgrade);
 
-    // Минимумы
     this.speed = Math.max(20, this.speed);
     this.damage = Math.max(1, this.damage);
     this.maxHp = Math.max(10, this.maxHp);
@@ -153,7 +142,6 @@ export class Player {
         });
       }
     }
-    // fallback: если upgrades не заполнены, но visualParts заполнен
     if (parts.length === 0 && this.visualParts.length > 0) {
       for (const part of this.visualParts) parts.push({ part, layer: 5 });
     }

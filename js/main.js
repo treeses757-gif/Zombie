@@ -1,6 +1,4 @@
 // js/main.js
-// Точка входа: auth → меню → лобби → upgrade → game → конец.
-
 import { ensureAuth, db, ref, update, get, onValue } from './firebase.js';
 import {
   createRoom, joinRoom, listenRoom, pickRoles, startGame, MAX_PLAYERS, MIN_PLAYERS
@@ -12,7 +10,6 @@ import {
 import { UpgradeManager } from './upgrades.js';
 import { Game } from './game.js';
 
-// Каталог улучшений — грузим опционально, чтобы не падать при отсутствии
 let getAllUpgrades = () => [];
 let getUpgradeById = () => null;
 try {
@@ -24,18 +21,14 @@ try {
     for (const u of mod.getAllUpgrades() || []) if (u?.id) idx.set(u.id, u);
     getUpgradeById = (id) => idx.get(id) || null;
   }
-} catch (e) {
-  console.warn('[main] Каталог улучшений недоступен:', e);
-}
+} catch (e) { console.warn('[main] Каталог улучшений недоступен:', e); }
 
-// Глобальное состояние
 let currentUid = null;
 let currentRoomId = null;
 let unlistenRoom = null;
 let gameInstance = null;
 let startingGame = false;
 
-// Стартовые улучшения по роли
 function getDefaultUpgradeIds(role) {
   switch (role) {
     case 'survivor':        return ['surv_main_01', 'surv_pas_01'];
@@ -46,9 +39,6 @@ function getDefaultUpgradeIds(role) {
   }
 }
 
-// ============================================================
-// ИНИЦИАЛИЗАЦИЯ
-// ============================================================
 async function init() {
   try {
     const user = await ensureAuth();
@@ -74,9 +64,7 @@ function bindMenu() {
       await enterRoom(res.roomId);
     } catch (e) {
       alert('Не удалось создать комнату: ' + (e?.message || e));
-    } finally {
-      createBtn.disabled = false;
-    }
+    } finally { createBtn.disabled = false; }
   });
 
   joinBtn.addEventListener('click', async () => {
@@ -89,9 +77,7 @@ function bindMenu() {
       await enterRoom(roomId);
     } catch (e) {
       alert('Не удалось присоединиться: ' + (e?.message || e));
-    } finally {
-      joinBtn.disabled = false;
-    }
+    } finally { joinBtn.disabled = false; }
   });
 }
 
@@ -100,14 +86,10 @@ async function enterRoom(roomId) {
   setRoomIdDisplay(roomId);
   showScreen('lobby-screen');
   bindStartButton();
-
   if (unlistenRoom) unlistenRoom();
   unlistenRoom = listenRoom(roomId, (room) => handleRoomUpdate(room, roomId));
 }
 
-// ============================================================
-// КНОПКА СТАРТ (у хоста)
-// ============================================================
 function bindStartButton() {
   const btn = document.getElementById('start-btn');
   if (!btn) return;
@@ -118,9 +100,7 @@ function bindStartButton() {
     if (!currentRoomId) return;
     clone.disabled = true;
     try {
-      // 1. Назначаем роли
       await pickRoles(currentRoomId);
-      // 2. Переводим в фазу улучшений
       await update(ref(db, `rooms/${currentRoomId}`), { state: 'upgrade' });
     } catch (e) {
       alert('Ошибка старта: ' + (e?.message || e));
@@ -129,65 +109,50 @@ function bindStartButton() {
   });
 }
 
-// ============================================================
-// ОБРАБОТКА ИЗМЕНЕНИЙ КОМНАТЫ
-// ============================================================
 async function handleRoomUpdate(room, roomId) {
   if (!room) return;
   room.id = roomId;
-
   const state = room.state || 'lobby';
   const isHost = room.host === currentUid;
   const players = room.players || {};
   const playersCount = Object.keys(players).length;
   const me = players[currentUid];
 
-  // --- ЛОББИ ---
   if (state === 'lobby') {
     if (gameInstance) { gameInstance.stop(); gameInstance = null; }
     if (window.__currentScreen !== 'lobby-screen') showScreen('lobby-screen');
-
     updateLobby(room, currentUid);
     const canStart = isHost && playersCount >= MIN_PLAYERS && playersCount <= MAX_PLAYERS;
     enableStartButton(canStart);
     updateLobbyStatus(
       playersCount < MIN_PLAYERS
         ? `Ожидание игроков (${playersCount}/${MIN_PLAYERS} минимум)...`
-        : isHost
-          ? 'Нажмите «Старт», когда все готовы'
-          : 'Ожидание хоста...'
+        : isHost ? 'Нажмите «Старт», когда все готовы' : 'Ожидание хоста...'
     );
     return;
   }
 
-  // --- ФАЗА УЛУЧШЕНИЙ ---
   if (state === 'upgrade') {
-    // Проверяем, все ли игроки подтвердили
-    const allReady = playersCount > 0 &&
-      Object.values(players).every(p => p.upgradeSubmitted);
+    const allReady = playersCount > 0 && Object.values(players).every(p => p.upgradeSubmitted);
 
     if (window.__currentScreen !== 'upgrade-screen') {
       const myRole = me?.role;
       const defaultIds = getDefaultUpgradeIds(myRole);
       const defaultObjs = defaultIds.map(id => getUpgradeById(id)).filter(Boolean);
-
       showUpgradeScreen(myRole, defaultObjs, async () => {
         await handleUpgradeSubmit(myRole, defaultIds);
       });
     }
 
-    // Прогресс
     const readyCount = Object.values(players).filter(p => p.upgradeSubmitted).length;
     setUpgradeProgress(`Готовы: ${readyCount}/${playersCount}`);
 
-    // Локальный игрок уже подтвердил — блокируем кнопку
     if (me?.upgradeSubmitted) {
       const btn = document.getElementById('upgrade-submit');
       if (btn) btn.disabled = true;
       showUpgradeMessage('Улучшения приняты. Ждём остальных...');
     }
 
-    // Если все готовы и мы хост — запускаем игру
     if (allReady && isHost && !startingGame) {
       startingGame = true;
       try {
@@ -199,22 +164,16 @@ async function handleRoomUpdate(room, roomId) {
       } catch (e) {
         console.error('[main] startGame error:', e);
         try { await update(ref(db, `rooms/${roomId}`), { state: 'playing' }); } catch (_) {}
-      } finally {
-        startingGame = false;
-      }
+      } finally { startingGame = false; }
     }
     return;
   }
 
-  // --- ИГРА ---
   if (state === 'playing') {
-    if (!gameInstance) {
-      startPlaying(room, roomId);
-    }
+    if (!gameInstance) startPlaying(room, roomId);
     return;
   }
 
-  // --- КОНЕЦ ---
   if (state === 'finished') {
     if (gameInstance) { gameInstance.stop(); gameInstance = null; }
     showEndScreen(room.winner);
@@ -222,47 +181,33 @@ async function handleRoomUpdate(room, roomId) {
   }
 }
 
-// Сохранение выбранных улучшений в Firebase
 async function handleUpgradeSubmit(role, defaultIds) {
   if (!currentRoomId || !currentUid) return;
-
-  const payload = {
-    upgradeIds: defaultIds,
-    upgradeSubmitted: true
-  };
-
   try {
-    await update(ref(db, `rooms/${currentRoomId}/players/${currentUid}`), payload);
+    await update(ref(db, `rooms/${currentRoomId}/players/${currentUid}`), {
+      upgradeIds: defaultIds,
+      upgradeSubmitted: true
+    });
     showUpgradeMessage('Улучшения приняты!', false);
   } catch (e) {
     showUpgradeMessage('Ошибка сохранения: ' + (e?.message || e), true);
   }
 }
 
-// ============================================================
-// ЗАПУСК ИГРЫ
-// ============================================================
+// FIX A3: сначала показать экран, потом стартовать игру
 function startPlaying(room, roomId) {
-  gameInstance = new Game({
-    roomId,
-    uid: currentUid,
-    room,
-    onFinish: (winner) => {
-      // Хост фиксирует результат в Firebase
-      const isHost = room.host === currentUid;
-      if (isHost) {
-        update(ref(db, `rooms/${roomId}`), {
-          state: 'finished',
-          winner
-        }).catch((e) => console.error('[main] finish error:', e));
-      }
-    }
-  });
-  gameInstance.start();
   showScreen('game-screen');
+  requestAnimationFrame(() => {
+    gameInstance = new Game({
+      roomId, uid: currentUid, room,
+      onFinish: (winner) => {
+        if (room.host === currentUid) {
+          update(ref(db, `rooms/${roomId}`), { state: 'finished', winner }).catch(() => {});
+        }
+      }
+    });
+    gameInstance.start();
+  });
 }
 
-// ============================================================
-// СТАРТ
-// ============================================================
 init();

@@ -1,18 +1,14 @@
 * { box-sizing: border-box; }
 body {
   margin: 0;
+  overflow: hidden;
+  background: #111;
   font-family: system-ui, -apple-system, sans-serif;
-  background: #0f0f14;
   color: #e8e8ec;
   min-height: 100vh;
 }
 
-.screen {
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 24px;
-}
-
+.screen { max-width: 900px; margin: 0 auto; padding: 24px; overflow: auto; max-height: 100vh; }
 h1, h2 { text-align: center; }
 
 button {
@@ -41,63 +37,43 @@ input, textarea {
   font-family: inherit;
   font-size: 15px;
 }
+.menu-box { max-width: 360px; margin: 0 auto; display: flex; flex-direction: column; }
+.divider { text-align: center; color: #666; margin: 12px 0; }
 
-.menu-box {
-  max-width: 360px;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-}
-
-.divider {
-  text-align: center;
-  color: #666;
-  margin: 12px 0;
-}
-
-#lobby-players {
-  list-style: none;
-  padding: 0;
-  max-width: 400px;
-  margin: 16px auto;
-}
-#lobby-players li {
-  padding: 8px 12px;
-  background: #1a1a22;
-  margin: 6px 0;
-  border-radius: 6px;
-}
-
-#lobby-status, #upgrade-message, #upgrade-progress {
-  text-align: center;
-  min-height: 20px;
-  margin: 8px 0;
-}
+#lobby-players { list-style: none; padding: 0; max-width: 400px; margin: 16px auto; }
+#lobby-players li { padding: 8px 12px; background: #1a1a22; margin: 6px 0; border-radius: 6px; }
 
 #game-screen {
-  text-align: center;
+  max-width: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  align-items: center;
+  justify-content: center;
 }
 #game-status {
   font-family: monospace;
   padding: 8px;
-  background: #1a1a22;
-  border-radius: 6px 6px 0 0;
-  max-width: 800px;
-  margin: 0 auto;
-}
-#game-canvas {
-  background: #000;
-  border-radius: 0 0 6px 6px;
-  display: block;
-  margin: 0 auto;
-  max-width: 100%;
-  image-rendering: pixelated;
+  background: rgba(26,26,34,0.9);
+  color: #fff;
+  font-size: 14px;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
 }
 
-code {
-  background: #1a1a22;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: monospace;
-  color: #fbbf24;
+/* FIX A3 / B1: полноэкранный canvas с курсором-прицелом */
+#gameCanvas, #game-canvas {
+  display: block;
+  cursor: crosshair;
+  background: #0a0a0f;
+  outline: none;
+  border: none;
 }
+
+code { background: #1a1a22; padding: 2px 6px; border-radius: 4px; font-family: monospace; color: #fbbf24; }
