@@ -1,28 +1,18 @@
-// Типы зомби + фабрика. Каждый класс задаёт свой базовый style
-// (используется PART_RENDERERS в spriteSystem.js и игровой логикой).
-
+// FIX 1: стартовые upgrades через defaultUpgradeIds.
+// FIX 5: автоатака базы (isBaseAttacker = true у всех зомби).
 import { Player } from './player.js';
 
-// Танк: много HP, медленный, защищает союзников
 export class TankZombie extends Player {
   constructor(opts) {
     super({ ...opts, role: 'zombie_tank' });
-    this.maxHp *= 2;
-    this.hp = this.maxHp;
-    this.speed *= 0.6;
+    this.maxHp *= 2; this.hp = this.maxHp;
+    this.speed *= 0.6; this.maxSpeed = this.speed;
     this.damage *= 0.7;
     this.shield = true;
-
-    // Базовый визуальный стиль
-    this.style = {
-      bodyColor:   '#71717a',
-      accentColor: '#52525b',
-      eyeColor:    '#fbbf24',
-      shieldColor: '#52525b'
-    };
+    this.style = { bodyColor: '#71717a', accentColor: '#52525b', eyeColor: '#fbbf24', shieldColor: '#52525b' };
+    // FIX 1
+    this.defaultUpgradeIds = ['tnk_main_01', 'tnk_sec_01', 'tnk_pas_01'];
   }
-
-  // Поглотить часть урона, летящего в союзника. Возвращает сколько принял на себя.
   absorbDamage(ally, amount) {
     if (!this.shield || !this.alive || !ally.alive) return 0;
     const absorbed = amount * 0.6;
@@ -31,41 +21,29 @@ export class TankZombie extends Player {
   }
 }
 
-// Атакующий: быстрый и бьёт больно, но хрупкий
 export class AttackerZombie extends Player {
   constructor(opts) {
     super({ ...opts, role: 'zombie_attacker' });
-    this.maxHp *= 0.7;
-    this.hp = this.maxHp;
-    this.speed *= 1.3;
+    this.maxHp *= 0.7; this.hp = this.maxHp;
+    this.speed *= 1.3; this.maxSpeed = this.speed;
     this.damage *= 1.5;
-
-    this.style = {
-      bodyColor:   '#4d7c0f',
-      accentColor: '#dc2626',
-      eyeColor:    '#ff3030',
-      clawColor:   '#fbbf24'
-    };
+    this.attackSpeed = 1.5;
+    this.style = { bodyColor: '#4d7c0f', accentColor: '#dc2626', eyeColor: '#ff3030', clawColor: '#fbbf24' };
+    // FIX 1
+    this.defaultUpgradeIds = ['att_main_01', 'att_sec_01', 'att_pas_01'];
   }
 }
 
-// Помогающий: лечит/баффает союзных зомби, слаб в бою
 export class SupportZombie extends Player {
   constructor(opts) {
     super({ ...opts, role: 'zombie_support' });
-    this.maxHp *= 0.8;
-    this.hp = this.maxHp;
+    this.maxHp *= 0.8; this.hp = this.maxHp;
     this.damage *= 0.5;
-    this.healCooldown = 0; // сек
-
-    this.style = {
-      bodyColor:   '#7c3aed',
-      accentColor: '#4ade80',
-      eyeColor:    '#22d3ee',
-      crystalColor:'#4ade80'
-    };
+    this.healCooldown = 0;
+    this.style = { bodyColor: '#7c3aed', accentColor: '#4ade80', eyeColor: '#22d3ee', crystalColor: '#4ade80' };
+    // FIX 1
+    this.defaultUpgradeIds = ['sup_main_01', 'sup_sec_01', 'sup_pas_01'];
   }
-
   healAlly(ally, amount) {
     if (this.healCooldown > 0 || !ally.alive) return 0;
     const healed = ally.heal(amount);
@@ -74,17 +52,12 @@ export class SupportZombie extends Player {
   }
 }
 
-// Возвращает МАССИВ ТИПОВ зомби для заданного общего числа игроков.
-// 2 игрока: 1 выживший + attacker
-// 3 игрока: 1 выживший + attacker + support
-// 4 игрока: 1 выживший + attacker + tank + support
 export function createZombiesForPlayerCount(count) {
   if (count <= 2) return ['attacker'];
   if (count === 3) return ['attacker', 'support'];
   return ['attacker', 'tank', 'support'];
 }
 
-// Фабрика конкретного зомби по типу
 export function createZombie(type, opts) {
   switch (type) {
     case 'tank':    return new TankZombie(opts);
@@ -94,7 +67,6 @@ export function createZombie(type, opts) {
   }
 }
 
-// Маппинг role → тип (когда rooms.js уже записал role в Firebase)
 export function roleToZombieType(role) {
   if (role === 'zombie_tank')    return 'tank';
   if (role === 'zombie_support') return 'support';

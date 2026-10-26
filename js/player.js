@@ -1,64 +1,82 @@
-// Базовый класс игрока. Наследуется зомби-типами.
-// Хранит визуальные слои улучшений (visualLayers) для spriteSystem.js.
-
+// Базовый класс игрока. FIX 1 (applyUpgrade + стартовые upgrades), FIX 2 (анимация), FIX 6 (плавное движение).
 export class Player {
   constructor({
-    id,
-    name = 'Игрок',
-    x = 0,
-    y = 0,
-    hp = 100,
-    maxHp = 100,
-    speed = 150,
-    damage = 20,
-    role = 'survivor',
-    upgrade = null,
-    upgrades = null,
-    canvasW = 800,
-    canvasH = 600
+    id, name = 'Игрок', x = 0, y = 0,
+    hp = 100, maxHp = 100, speed = 150, damage = 20,
+    role = 'survivor', upgrade = null, upgrades = null,
+    canvasW = 800, canvasH = 600
   } = {}) {
     this.id = id;
     this.name = name;
-    this.x = x;
-    this.y = y;
-    this.hp = hp;
-    this.maxHp = maxHp;
-    this.speed = speed;
-    this.damage = damage;
+    this.x = x; this.y = y;
+    this.hp = hp; this.maxHp = maxHp;
+    this.speed = speed; this.damage = damage;
     this.role = role;
-    this.upgrade = upgrade;             // совместимость со старым форматом (parsed)
-    this.canvasW = canvasW;
-    this.canvasH = canvasH;
+    this.upgrade = upgrade;
+    this.canvasW = canvasW; this.canvasH = canvasH;
     this.alive = hp > 0;
     this.angle = 0;
     this._lastHit = 0;
-    this._prevX = x;
-    this._prevY = y;
+    this._prevX = x; this._prevY = y;
 
-    // Массив выбранных улучшений (полные объекты из upgrades/*.js)
+    // FIX 6: физика с ускорением
+    this.vx = 0; this.vy = 0;
+    this.acceleration = 1800;
+    this.maxSpeed = speed;
+    this.friction = 0.85;
+
+    // FIX 3: скорость атаки (ударов/выстрелов в секунду)
+    this.attackSpeed = 1.0;
+
+    // FIX 2: анимация
+    this.anim = { walkPhase: 0, attackTimer: 0, hurtTimer: 0, deathTimer: 0 };
+
+    // FIX 1: выбранные улучшения и их визуальные части
     this.upgrades = Array.isArray(upgrades) ? upgrades.slice() : [];
-    // Кэш визуальных слоёв: [{ part, layer }, ...] в порядке отрисовки
+    this.visualParts = [];
     this.visualLayers = [];
+    this.defaultUpgradeIds = []; // заполняется в наследниках
 
-    // Применяем старое numeric-улучшение, если было передано
-    if (upgrade) this.applyUpgrade(upgrade);
-
-    // Пересобираем визуальные слои (если upgrades уже были)
+    if (upgrade) this.applyUpgrade(upgrade); // старый числовой формат
     this.refreshVisualLayers();
   }
 
-  // Движение с ограничением по границам canvas
-  move(dx, dy) {
-    this.x = Math.max(0, Math.min(this.canvasW, this.x + dx));
-    this.y = Math.max(0, Math.min(this.canvasH, this.y + dy));
+  // FIX 6: движение с ускорением и трением
+  updateMovement(dt, inputX, inputY) {
+    if (inputX || inputY) {
+      const len = Math.hypot(inputX, inputY) || 1;
+      const nx = inputX / len, ny = inputY / len;
+      this.vx += nx * this.acceleration * dt;
+      this.vy += ny * this.acceleration * dt;
+    } else {
+      // FIX 6: трение
+      const f = Math.pow(this.friction, dt * 60);
+      this.vx *= f; this.vy *= f;
+    }
+    const sp = Math.hypot(this.vx, this.vy);
+    if (sp > this.maxSpeed) {
+      this.vx = (this.vx / sp) * this.maxSpeed;
+      this.vy = (this.vy / sp) * this.maxSpeed;
+    }
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    if (sp > 5) this.angle = Math.atan2(this.vy, this.vx);
   }
 
+  // FIX 2: триггер анимации атаки
+  triggerAttack() {
+    this.anim.attackTimer = 150;
+  }
+
+  // FIX 2: урон + hurt-анимация
   takeDamage(amount) {
     if (!this.alive) return false;
     this.hp = Math.max(0, this.hp - amount);
+    this.anim.hurtTimer = 200;
     if (this.hp <= 0) {
       this.hp = 0;
       this.alive = false;
+      this.anim.deathTimer = 500;
     }
     return this.alive;
   }
@@ -70,46 +88,61 @@ export class Player {
     return this.hp - before;
   }
 
-  // Старый формат: { hp: 0.1, speed: -0.05, damage: 0 } — доли от базы.
-  applyUpgrade(parsed) {
-    if (!parsed) return;
-    if (parsed.hp) {
-      const diff = this.maxHp * parsed.hp;
-      this.maxHp = Math.max(10, this.maxHp + diff);
-      if (diff > 0) this.hp = Math.min(this.maxHp, this.hp + diff);
+  // FIX 1: применение улучшения (эффекты в процентах, абсолютный HP)
+  applyUpgrade(upgrade) {
+    if (!upgrade) return;
+
+    // Старый формат: { hp: 0.1, speed: -0.05, damage: 0 } — доли
+    if (upgrade.hp === undefined && upgrade.speed === undefined &&
+        upgrade.damage === undefined && (upgrade.parsed || upgrade.hp === 0)) {
+      // нет effects — пропускаем
     }
-    if (parsed.speed)  this.speed  *= (1 + parsed.speed);
-    if (parsed.damage) this.damage *= (1 + parsed.damage);
 
-    // Защитные минимумы
-    this.speed  = Math.max(20, this.speed);
-    this.damage = Math.max(1,  this.damage);
-    this.maxHp  = Math.max(10, this.maxHp);
-    this.hp     = Math.min(this.hp, this.maxHp);
-  }
+    const e = upgrade.effects || {};
 
-  // Новый формат: полный объект улучшения из upgrades/*.js
-  // { id, slot, title, effects: { hp:+15, speed:-5, ... }, visual: { part, layer } }
-  // effects в ПРОЦЕНТАХ. Применяем числовые ключи, остальные сохраняются в upgrades.
-  addUpgrade(upgradeObj) {
-    if (!upgradeObj) return;
-    this.upgrades.push(upgradeObj);
+    // Абсолютный HP (у эффектов upgrade.effects.hp — число, не процент)
+    if (typeof e.hp === 'number') {
+      this.maxHp += e.hp;
+      this.hp = Math.min(this.maxHp, this.hp + Math.max(0, e.hp));
+    }
+    if (typeof e.speed === 'number' && e.speed !== 0) {
+      this.speed *= (1 + e.speed / 100);
+    }
+    if (typeof e.damage === 'number' && e.damage !== 0) {
+      this.damage *= (1 + e.damage / 100);
+    }
+    if (typeof e.attackSpeed === 'number' && e.attackSpeed !== 0) {
+      this.attackSpeed *= (1 + e.attackSpeed / 100);
+    }
 
-    const eff = upgradeObj.effects || {};
-    const parsed = {};
-    if (typeof eff.hp     === 'number') parsed.hp     = eff.hp / 100;
-    if (typeof eff.hpMax  === 'number') parsed.hp     = (parsed.hp || 0) + eff.hpMax / 100;
-    if (typeof eff.speed  === 'number') parsed.speed  = eff.speed / 100;
-    if (typeof eff.damage === 'number') parsed.damage = eff.damage / 100;
-    if (Object.keys(parsed).length > 0) this.applyUpgrade(parsed);
+    // Старый формат: numeric-поля в корне (для совместимости)
+    if (upgrade.parsed) {
+      const p = upgrade.parsed;
+      if (p.hp)     { this.maxHp = Math.max(10, this.maxHp + this.maxHp * p.hp); }
+      if (p.speed)  this.speed *= (1 + p.speed);
+      if (p.damage) this.damage *= (1 + p.damage);
+    }
 
-    // Остальные эффекты (resist, critChance, cooldown и т.д.)
-    // читаются игровой логикой прямо из this.upgrades — здесь не дублируем.
+    // FIX 6: пересчитать maxSpeed после изменения speed
+    this.maxSpeed = this.speed;
 
+    // FIX 1: визуальная часть
+    if (upgrade.visual && upgrade.visual.part) {
+      if (!this.visualParts.includes(upgrade.visual.part)) {
+        this.visualParts.push(upgrade.visual.part);
+      }
+    }
+    // Запоминаем в общем списке
+    if (!this.upgrades.includes(upgrade)) this.upgrades.push(upgrade);
+
+    // Минимумы
+    this.speed = Math.max(20, this.speed);
+    this.damage = Math.max(1, this.damage);
+    this.maxHp = Math.max(10, this.maxHp);
+    this.hp = Math.min(this.hp, this.maxHp);
     this.refreshVisualLayers();
   }
 
-  // Возвращает массив { part, layer } из выбранных улучшений в порядке слоёв
   getVisualParts() {
     const parts = [];
     for (const up of this.upgrades) {
@@ -120,32 +153,24 @@ export class Player {
         });
       }
     }
-    parts.sort((a, b) => a.layer - b.layer);
-    return parts;
+    // fallback: если upgrades не заполнены, но visualParts заполнен
+    if (parts.length === 0 && this.visualParts.length > 0) {
+      for (const part of this.visualParts) parts.push({ part, layer: 5 });
+    }
+    return parts.sort((a, b) => a.layer - b.layer);
   }
 
-  // Пересобирает кэш visualLayers (вызывать после изменения upgrades)
   refreshVisualLayers() {
     this.visualLayers = this.getVisualParts();
   }
 
   serialize() {
     return {
-      id: this.id,
-      name: this.name,
-      x: Math.round(this.x),
-      y: Math.round(this.y),
-      hp: Math.round(this.hp),
-      maxHp: Math.round(this.maxHp),
-      speed: this.speed,
-      damage: this.damage,
-      role: this.role,
-      alive: this.alive,
-      angle: this.angle
+      id: this.id, name: this.name,
+      x: Math.round(this.x), y: Math.round(this.y),
+      hp: Math.round(this.hp), maxHp: Math.round(this.maxHp),
+      speed: this.speed, damage: this.damage,
+      role: this.role, alive: this.alive, angle: this.angle
     };
-  }
-
-  static deserialize(data, canvasW, canvasH) {
-    return new Player({ ...data, canvasW, canvasH });
   }
 }
