@@ -1,6 +1,5 @@
 // js/main.js
-// RANDOM-FIX5: генерация upgradeChoices на хосте ПРИ КАЖДОМ старте раунда.
-// RANDOM-FIX6: excludes из player.upgradeIds (накопленные).
+// CACHE-FIX: импорты game.js и ui.js с ?v=2 — Chrome скачает свежие версии.
 import { ensureAuth, db, ref, update, get } from './firebase.js';
 import {
   createRoom, joinRoom, listenRoom, pickRoles, startGame, MAX_PLAYERS, MIN_PLAYERS
@@ -8,8 +7,8 @@ import {
 import {
   showScreen, updateLobby, updateLobbyStatus, enableStartButton, setRoomIdDisplay,
   showUpgradeScreen, showUpgradeMessage, setUpgradeProgress, showEndScreen
-} from './ui.js';
-import { Game } from './game.js';
+} from './ui.js?v=2';
+import { Game } from './game.js?v=2';
 
 let getAllUpgrades = () => [];
 let getUpgradeById = () => null;
@@ -76,11 +75,7 @@ async function enterRoom(roomId) {
   unlistenRoom = listenRoom(roomId, (room) => handleRoomUpdate(room, roomId));
 }
 
-// RANDOM-FIX5: единая функция запуска фазы улучшений
 async function startUpgradePhase(roomId) {
-  if (!generateUpgradeChoices) {
-    console.warn('[startUpgradePhase] generateUpgradeChoices недоступна, используем дефолты');
-  }
   const snap = await get(ref(db, `rooms/${roomId}/players`));
   const players = snap.val() || {};
   const updates = {};
@@ -152,7 +147,6 @@ async function handleRoomUpdate(room, roomId) {
       for (const [slot, ids] of Object.entries(me.upgradeChoices)) {
         choices[slot] = (ids || []).map(id => getUpgradeById(id)).filter(Boolean);
       }
-      console.log('[UI] rendering upgrade screen for', currentUid, 'choices=', choices);
       showUpgradeScreen(role, choices, async (selectedIds) => {
         await handleUpgradeConfirm(selectedIds);
       });
@@ -195,7 +189,6 @@ async function handleRoomUpdate(room, roomId) {
   }
 }
 
-// RANDOM-FIX6: накапливаем upgradeIds (не перезаписываем)
 async function handleUpgradeConfirm(selectedIds) {
   if (!currentRoomId || !currentUid) return;
   try {
