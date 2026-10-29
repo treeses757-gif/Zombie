@@ -1,5 +1,7 @@
 // js/upgrades/index.js
-// BUG2-FIX1: настоящий shuffle + excludeIds + generateUpgradeChoices.
+// RANDOM-FIX1: корректный Fisher-Yates shuffle.
+// RANDOM-FIX2: getRandomChoices с excludeIds + логирование.
+// RANDOM-FIX3: generateUpgradeChoices для всех 3 слотов.
 import * as survivorMod from './survivorUpgrades.js';
 import * as attackerMod from './attackerUpgrades.js';
 import * as tankMod     from './tankUpgrades.js';
@@ -40,7 +42,7 @@ const ALL_UPGRADES = [
 const BY_ID = new Map();
 for (const u of ALL_UPGRADES) if (u.id) BY_ID.set(u.id, u);
 
-// BUG2-FIX1: настоящий Fisher–Yates
+// RANDOM-FIX1: корректный Fisher-Yates
 export function shuffleArray(arr) {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -58,19 +60,22 @@ export function getUpgradesFor(role, slot = null) {
 
 export function getUpgradeById(id) { return BY_ID.get(id) || null; }
 
-// BUG2-FIX1: count параметр, excludeIds, shuffle
+// RANDOM-FIX2: shuffle + excludeIds + дедуп по id
 export function getRandomChoices(role, slot, count = 2, excludeIds = []) {
+  const all = getUpgradesFor(role, slot);
+  if (!all || all.length === 0) return [];
+  const unique = Array.from(new Map(all.map(u => [u.id, u])).values());
   const exclude = new Set(excludeIds);
-  const pool = getUpgradesFor(role, slot).filter(u => !exclude.has(u.id));
-  return shuffleArray(pool).slice(0, count);
+  const filtered = unique.filter(u => !exclude.has(u.id));
+  const pool = filtered.length >= count ? filtered : unique;
+  const result = shuffleArray(pool).slice(0, count);
+  console.log('[getRandomChoices]', role, slot, 'pool=', pool.length, 'excluded=', excludeIds.length, '→', result.map(u => u.id));
+  return result;
 }
 
-// BUG2-FIX2: генерация полного набора для игрока
-// Для выжившего — main + passive. Для зомби — main + secondary + passive.
+// RANDOM-FIX3: полный набор для всех трёх слотов
 export function generateUpgradeChoices(role, existingIds = [], count = 2) {
-  const slots = role === 'survivor'
-    ? ['main', 'passive']
-    : ['main', 'secondary', 'passive'];
+  const slots = ['main', 'secondary', 'passive'];
   const result = {};
   for (const slot of slots) {
     const pool = getRandomChoices(role, slot, count, existingIds);
