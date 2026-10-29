@@ -1,5 +1,5 @@
 // js/player.js
-// Базовый класс игрока. FIX 1 (applyUpgrade + стартовые upgrades), FIX 2 (анимация), FIX 6 (плавное движение), FIX B7-B8 (damage, takeDamage).
+// BUG1-FIX5: hitRadius по роли. BUG3-FIX3: takeDamage с защитой.
 export class Player {
   constructor({
     id, name = 'Игрок', x = 0, y = 0,
@@ -12,7 +12,6 @@ export class Player {
     this.x = x; this.y = y;
     this.hp = hp; this.maxHp = maxHp;
     this.speed = speed;
-    // FIX B7: damage никогда не 0/undefined
     this.damage = typeof damage === 'number' && damage > 0 ? damage : 25;
     this.role = role;
     this.upgrade = upgrade;
@@ -22,19 +21,17 @@ export class Player {
     this._lastHit = 0;
     this._prevX = x; this._prevY = y;
 
-    // FIX 6: физика с ускорением
+    // BUG1-FIX5: радиус попадания
+    this.hitRadius = role === 'zombie_tank' ? 28 : 18;
+
     this.vx = 0; this.vy = 0;
     this.acceleration = 1800;
     this.maxSpeed = speed;
     this.friction = 0.85;
 
-    // FIX B7: скорость атаки (ударов/выстрелов в секунду)
     this.attackSpeed = 2.0;
-
-    // FIX 2: анимация
     this.anim = { walkPhase: 0, attackTimer: 0, hurtTimer: 0, deathTimer: 0 };
 
-    // FIX 1: выбранные улучшения и их визуальные части
     this.upgrades = Array.isArray(upgrades) ? upgrades.slice() : [];
     this.visualParts = [];
     this.visualLayers = [];
@@ -44,13 +41,11 @@ export class Player {
     this.refreshVisualLayers();
   }
 
-  // FIX 6: движение с ускорением и трением
   updateMovement(dt, inputX, inputY) {
     if (inputX || inputY) {
       const len = Math.hypot(inputX, inputY) || 1;
-      const nx = inputX / len, ny = inputY / len;
-      this.vx += nx * this.acceleration * dt;
-      this.vy += ny * this.acceleration * dt;
+      this.vx += (inputX / len) * this.acceleration * dt;
+      this.vy += (inputY / len) * this.acceleration * dt;
     } else {
       const f = Math.pow(this.friction, dt * 60);
       this.vx *= f; this.vy *= f;
@@ -65,14 +60,12 @@ export class Player {
     if (sp > 5) this.angle = Math.atan2(this.vy, this.vx);
   }
 
-  // FIX 2: триггер анимации атаки
-  triggerAttack() {
-    this.anim.attackTimer = 150;
-  }
+  triggerAttack() { this.anim.attackTimer = 150; }
 
-  // FIX B8: урон с защитой от повторной смерти
-  takeDamage(amount) {
+  // BUG3-FIX3: sourceRole защищает от «своих»
+  takeDamage(amount, sourceRole) {
     if (!this.alive) return false;
+    if (this.role === 'base' && sourceRole === 'survivor') return false;
     this.hp = Math.max(0, this.hp - amount);
     this.anim.hurtTimer = 200;
     if (this.hp <= 0) {
@@ -90,24 +83,16 @@ export class Player {
     return this.hp - before;
   }
 
-  // FIX 1: применение улучшения
   applyUpgrade(upgrade) {
     if (!upgrade) return;
     const e = upgrade.effects || {};
-
     if (typeof e.hp === 'number') {
       this.maxHp += e.hp;
       this.hp = Math.min(this.maxHp, this.hp + Math.max(0, e.hp));
     }
-    if (typeof e.speed === 'number' && e.speed !== 0) {
-      this.speed *= (1 + e.speed / 100);
-    }
-    if (typeof e.damage === 'number' && e.damage !== 0) {
-      this.damage *= (1 + e.damage / 100);
-    }
-    if (typeof e.attackSpeed === 'number' && e.attackSpeed !== 0) {
-      this.attackSpeed *= (1 + e.attackSpeed / 100);
-    }
+    if (typeof e.speed === 'number' && e.speed !== 0) this.speed *= (1 + e.speed / 100);
+    if (typeof e.damage === 'number' && e.damage !== 0) this.damage *= (1 + e.damage / 100);
+    if (typeof e.attackSpeed === 'number' && e.attackSpeed !== 0) this.attackSpeed *= (1 + e.attackSpeed / 100);
 
     if (upgrade.parsed) {
       const p = upgrade.parsed;
@@ -117,11 +102,8 @@ export class Player {
     }
 
     this.maxSpeed = this.speed;
-
-    if (upgrade.visual && upgrade.visual.part) {
-      if (!this.visualParts.includes(upgrade.visual.part)) {
-        this.visualParts.push(upgrade.visual.part);
-      }
+    if (upgrade.visual && upgrade.visual.part && !this.visualParts.includes(upgrade.visual.part)) {
+      this.visualParts.push(upgrade.visual.part);
     }
     if (!this.upgrades.includes(upgrade)) this.upgrades.push(upgrade);
 
@@ -135,12 +117,7 @@ export class Player {
   getVisualParts() {
     const parts = [];
     for (const up of this.upgrades) {
-      if (up && up.visual && up.visual.part) {
-        parts.push({
-          part: up.visual.part,
-          layer: typeof up.visual.layer === 'number' ? up.visual.layer : 5
-        });
-      }
+      if (up?.visual?.part) parts.push({ part: up.visual.part, layer: up.visual.layer ?? 5 });
     }
     if (parts.length === 0 && this.visualParts.length > 0) {
       for (const part of this.visualParts) parts.push({ part, layer: 5 });
@@ -148,9 +125,7 @@ export class Player {
     return parts.sort((a, b) => a.layer - b.layer);
   }
 
-  refreshVisualLayers() {
-    this.visualLayers = this.getVisualParts();
-  }
+  refreshVisualLayers() { this.visualLayers = this.getVisualParts(); }
 
   serialize() {
     return {

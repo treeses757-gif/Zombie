@@ -1,13 +1,6 @@
 // js/ui.js
-// Управление экранами и DOM. Только показ/скрытие и обновление.
-
-const SCREENS = [
-  'menu-screen',
-  'lobby-screen',
-  'upgrade-screen',
-  'game-screen',
-  'end-screen'
-];
+// BUG2-FIX4: карточки (2 на слот), клик для выбора, confirm.
+const SCREENS = ['menu-screen','lobby-screen','upgrade-screen','game-screen','end-screen'];
 
 export function showScreen(id) {
   SCREENS.forEach(s => {
@@ -19,20 +12,25 @@ export function showScreen(id) {
 
 export function formatRole(role) {
   switch (role) {
-    case 'survivor':        return 'Выживший';
+    case 'survivor': return 'Выживший';
     case 'zombie_attacker': return 'Атакующий зомби';
-    case 'zombie_tank':     return 'Танк-зомби';
-    case 'zombie_support':  return 'Помогающий зомби';
-    case 'zombie':          return 'Зомби';
-    default:                return role || '—';
+    case 'zombie_tank': return 'Танк-зомби';
+    case 'zombie_support': return 'Помогающий зомби';
+    default: return role || '—';
   }
+}
+
+function formatSlot(slot) {
+  return slot === 'main' ? 'Основная атака'
+    : slot === 'secondary' ? 'Второстепенная'
+    : slot === 'passive' ? 'Пассивный бафф' : slot;
 }
 
 export function updateLobby(room, uid) {
   const list = document.getElementById('lobby-players');
   if (!list) return;
   list.innerHTML = '';
-  if (!room || !room.players) return;
+  if (!room?.players) return;
   for (const [pid, p] of Object.entries(room.players)) {
     const li = document.createElement('li');
     const isHost = room.host === pid;
@@ -59,29 +57,46 @@ export function setRoomIdDisplay(roomId) {
   if (el) el.textContent = roomId || '—';
 }
 
-// ГЛАВНОЕ ИСПРАВЛЕНИЕ: textarea — отдельный элемент, её parentNode НЕ скрываем.
-export function showUpgradeScreen(role, defaultUpgrades, onSubmit) {
+// BUG2-FIX4: карточки по 2 на слот, выбор кликом
+export function showUpgradeScreen(role, choices, onSubmit) {
   showScreen('upgrade-screen');
 
   const roleEl = document.getElementById('upgrade-role');
   if (roleEl) roleEl.textContent = formatRole(role);
 
   const listEl = document.getElementById('upgrade-list');
-  if (listEl) {
-    listEl.innerHTML = '';
-    if (defaultUpgrades && defaultUpgrades.length) {
-      const ul = document.createElement('ul');
-      ul.style.cssText = 'list-style:none;padding:0;margin:8px 0';
-      for (const u of defaultUpgrades) {
-        const li = document.createElement('li');
-        li.style.cssText = 'padding:8px 12px;background:#1a1a22;border-radius:6px;margin:4px 0;border-left:3px solid #4ade80';
-        li.innerHTML = `<b>${u.title || u.id}</b><br><span style="color:#999;font-size:13px">${u.description || ''}</span>`;
-        ul.appendChild(li);
-      }
-      listEl.appendChild(ul);
-    } else {
-      listEl.textContent = 'Стартовые улучшения назначены автоматически.';
+  listEl.innerHTML = '';
+
+  const selections = {}; // slot -> id
+
+  for (const [slot, upgrades] of Object.entries(choices)) {
+    const slotDiv = document.createElement('div');
+    slotDiv.style.cssText = 'margin: 12px 0; padding: 10px; background: #1a1a22; border-radius: 6px';
+
+    const slotLabel = document.createElement('div');
+    slotLabel.textContent = formatSlot(slot);
+    slotLabel.style.cssText = 'font-weight: bold; margin-bottom: 8px; color: #4ade80';
+    slotDiv.appendChild(slotLabel);
+
+    const cardsDiv = document.createElement('div');
+    cardsDiv.style.cssText = 'display: flex; gap: 8px; flex-wrap: wrap';
+
+    for (const upg of upgrades) {
+      if (!upg) continue;
+      const card = document.createElement('button');
+      card.dataset.id = upg.id;
+      card.style.cssText = 'flex: 1 1 200px; padding: 10px; background: #2a2a3a; color: #fff; border: 2px solid transparent; border-radius: 6px; text-align: left; cursor: pointer; font-size: 14px';
+      card.innerHTML = `<b>${upg.title}</b><br><span style="color:#999;font-size:12px">${upg.description || ''}</span>`;
+      card.onclick = () => {
+        cardsDiv.querySelectorAll('button').forEach(b => b.style.borderColor = 'transparent');
+        card.style.borderColor = '#4ade80';
+        selections[slot] = upg.id;
+        checkReady();
+      };
+      cardsDiv.appendChild(card);
     }
+    slotDiv.appendChild(cardsDiv);
+    listEl.appendChild(slotDiv);
   }
 
   showUpgradeMessage('');
@@ -90,19 +105,23 @@ export function showUpgradeScreen(role, defaultUpgrades, onSubmit) {
   const btn = document.getElementById('upgrade-submit');
   if (btn) {
     const clone = btn.cloneNode(true);
-    clone.disabled = false;
+    clone.disabled = true;
     btn.parentNode.replaceChild(clone, btn);
-    clone.addEventListener('click', () => onSubmit());
+
+    const checkReady = () => {
+      const allFilled = Object.keys(choices).every(slot => selections[slot]);
+      clone.disabled = !allFilled;
+    };
+
+    clone.onclick = () => {
+      const allIds = Object.entries(selections).map(([_, id]) => id).filter(Boolean);
+      if (allIds.length === 0) return;
+      onSubmit(allIds);
+    };
   }
 
-  // FIX: скрываем только сам textarea, а НЕ его родителя (иначе скроется весь экран)
   const ta = document.getElementById('upgrade-input');
-  if (ta) {
-    ta.disabled = false;
-    ta.value = '';
-    ta.style.display = 'none';
-    // ❌ БЫЛО: ta.parentNode.style.display = 'none';  — ЭТО СКРЫВАЛО ВЕСЬ ЭКРАН
-  }
+  if (ta) ta.style.display = 'none';
 }
 
 export function showUpgradeMessage(text, isError = false) {

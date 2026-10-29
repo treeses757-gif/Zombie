@@ -1,5 +1,5 @@
-// FIX 1: стартовые upgrades через defaultUpgradeIds.
-// FIX 5: автоатака базы (isBaseAttacker = true у всех зомби).
+// js/zombieTypes.js
+// BUG1-FIX5: hitRadius для танка больше.
 import { Player } from './player.js';
 
 export class TankZombie extends Player {
@@ -8,9 +8,9 @@ export class TankZombie extends Player {
     this.maxHp *= 2; this.hp = this.maxHp;
     this.speed *= 0.6; this.maxSpeed = this.speed;
     this.damage *= 0.7;
+    this.hitRadius = 28; // BUG1-FIX5
     this.shield = true;
     this.style = { bodyColor: '#71717a', accentColor: '#52525b', eyeColor: '#fbbf24', shieldColor: '#52525b' };
-    // FIX 1
     this.defaultUpgradeIds = ['tnk_main_01', 'tnk_sec_01', 'tnk_pas_01'];
   }
   absorbDamage(ally, amount) {
@@ -28,8 +28,8 @@ export class AttackerZombie extends Player {
     this.speed *= 1.3; this.maxSpeed = this.speed;
     this.damage *= 1.5;
     this.attackSpeed = 1.5;
+    this.hitRadius = 18; // BUG1-FIX5
     this.style = { bodyColor: '#4d7c0f', accentColor: '#dc2626', eyeColor: '#ff3030', clawColor: '#fbbf24' };
-    // FIX 1
     this.defaultUpgradeIds = ['att_main_01', 'att_sec_01', 'att_pas_01'];
   }
 }
@@ -40,8 +40,8 @@ export class SupportZombie extends Player {
     this.maxHp *= 0.8; this.hp = this.maxHp;
     this.damage *= 0.5;
     this.healCooldown = 0;
+    this.hitRadius = 18; // BUG1-FIX5
     this.style = { bodyColor: '#7c3aed', accentColor: '#4ade80', eyeColor: '#22d3ee', crystalColor: '#4ade80' };
-    // FIX 1
     this.defaultUpgradeIds = ['sup_main_01', 'sup_sec_01', 'sup_pas_01'];
   }
   healAlly(ally, amount) {
@@ -62,7 +62,6 @@ export function createZombie(type, opts) {
   switch (type) {
     case 'tank':    return new TankZombie(opts);
     case 'support': return new SupportZombie(opts);
-    case 'attacker':
     default:        return new AttackerZombie(opts);
   }
 }

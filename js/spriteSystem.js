@@ -1,6 +1,5 @@
 // js/spriteSystem.js
-// FIX A1: drawAnimatedBody делает ctx.translate(p.x, p.y) — база в мировых координатах.
-// FIX 2: анимации. FIX 5: drawBase.
+// BUG1-FIX1/2/3/4/7: единый скелет, локальные координаты, z-order, анимация от тела.
 export const PART_RENDERERS = {};
 
 const rad = (ctx, x, y, r, c0, c1) => { const g = ctx.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, c0); g.addColorStop(1, c1); return g; };
@@ -9,94 +8,75 @@ const rr = (ctx, x, y, w, h, r) => { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.
 const poly = (ctx, pts) => { ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]); ctx.closePath(); };
 const circle = (ctx, x, y, r, fill, stroke, lw = 1.5) => { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); if (fill) { ctx.fillStyle = fill; ctx.fill(); } if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.stroke(); } };
 const line = (ctx, x1, y1, x2, y2, color, lw = 2) => { ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); };
+
+// BUG1-FIX1: аура/нимб рисуются вокруг локального (0,0) — трансформ уже применён
 const aura = (ctx, p, t, r, g, b, radius, intensity = 1, sp = 0.003) => {
-  ctx.save(); ctx.translate(p.x, p.y);
   const pulse = 1 + Math.sin(t * sp) * 0.15;
   ctx.fillStyle = rad(ctx, 0, 0, radius * pulse, `rgba(${r},${g},${b},${0.5 * intensity})`, `rgba(${r},${g},${b},0)`);
   ctx.beginPath(); ctx.arc(0, 0, radius * pulse, 0, Math.PI * 2); ctx.fill();
-  ctx.restore();
 };
 const halo = (ctx, p, t, color, r = 14, yOff = -32, th = 3) => {
-  ctx.save(); ctx.translate(p.x, p.y + yOff);
+  ctx.save();
+  ctx.translate(0, yOff);
   ctx.strokeStyle = color; ctx.lineWidth = th;
   ctx.globalAlpha = 0.75 + Math.sin(t * 0.004) * 0.25;
   ctx.beginPath(); ctx.ellipse(0, 0, r, r * 0.35, 0, 0, Math.PI * 2); ctx.stroke();
   ctx.restore();
 };
+
 export const lerpColor = (a, b, t) => {
   const A = a.match(/\d+/g).map(Number), B = b.match(/\d+/g).map(Number);
   return `rgb(${Math.round(A[0] + (B[0] - A[0]) * t)},${Math.round(A[1] + (B[1] - A[1]) * t)},${Math.round(A[2] + (B[2] - A[2]) * t)})`;
 };
-export const drawGlow = (ctx, x, y, r, color) => { ctx.fillStyle = rad(ctx, x, y, r, color, 'transparent'); ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); };
+export const drawGlow = (ctx, x, y, r, color) => {
+  ctx.fillStyle = rad(ctx, x, y, r, color, 'transparent');
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+};
 
-// ============ FIX A1: drawAnimatedBody переносит базу в (p.x, p.y) ============
-function drawAnimatedBody(ctx, p, time, baseDrawFn) {
-  const a = p.anim || { walkPhase: 0, attackTimer: 0, hurtTimer: 0, deathTimer: 0 };
-  const isDead = !p.alive;
-  const wp = a.walkPhase || 0;
-  const spd = Math.hypot(p.vx || 0, p.vy || 0);
-  const walking = spd > 5;
+// BUG1-FIX2: единые скелеты (для справки — размеры совпадают с отрисовкой частей)
+// BUG1-FIX7: walkPhase двигает ТОЛЬКО ноги/руки, тело покачивается отдельно
+const SHADOW_SIZES = {
+  survivor:        { rx: 14, ry: 4,  y: 22 },
+  zombie_attacker: { rx: 12, ry: 4,  y: 20 },
+  zombie_tank:     { rx: 20, ry: 5,  y: 28 },
+  zombie_support:  { rx: 11, ry: 3,  y: 18 }
+};
 
-  const idleBob = Math.sin(time * 0.003) * 1.5;
-  const legSwing = walking ? Math.sin(wp) * 4 : 0;
-  const bodyTilt = walking ? Math.sin(wp * 2) * 0.05 : 0;
-  let lunge = 0;
-  if (a.attackTimer > 0) {
-    const prog = 1 - a.attackTimer / 150;
-    lunge = prog < 0.4 ? -prog * 8 : (prog - 0.4) * 15;
-  }
-  const hurtShake = a.hurtTimer > 0 ? Math.sin(time * 0.05) * 3 : 0;
-
-  ctx.save();
-  // ⬇⬇⬇ ГЛАВНЫЙ ФИКС: база в мировых координатах ⬇⬇⬇
-  ctx.translate(p.x, p.y);
-
-  if (isDead && a.deathTimer > 0) {
-    ctx.globalAlpha = Math.max(0.3, a.deathTimer / 500);
-    ctx.rotate((1 - a.deathTimer / 500) * Math.PI / 2);
-  }
-  ctx.translate(
-    Math.cos(p.angle || 0) * lunge + hurtShake,
-    idleBob + Math.sin(p.angle || 0) * lunge
-  );
-  ctx.rotate(bodyTilt);
-  baseDrawFn({ legSwing, walking, attackTimer: a.attackTimer });
-  ctx.restore();
-
-  if (a.hurtTimer > 0) {
-    ctx.save();
-    ctx.globalAlpha = (a.hurtTimer / 200) * 0.5;
-    ctx.fillStyle = '#ff2222';
-    ctx.beginPath(); ctx.arc(p.x, p.y - 5, 25, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
-  }
+// BUG1-FIX1: базовые тела рисуются в локальных координатах (0,0) = стопы.
+// Никакого ctx.translate(p.x, p.y) — всё уже сделано в drawPlayer.
+function drawBodyParts(ctx, p, baseDrawFn) {
+  const a = p.anim || { walkPhase: 0, attackTimer: 0 };
+  const walking = Math.hypot(p.vx || 0, p.vy || 0) > 5;
+  const legSwing = walking ? Math.sin(a.walkPhase || 0) * 4 : 0;
+  baseDrawFn({ legSwing, walking });
 }
 
-// ============ Базовые тела ============
 function drawSurvivorBase(ctx, p, time) {
-  drawAnimatedBody(ctx, p, time, ({ legSwing }) => {
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    ctx.beginPath(); ctx.ellipse(0, 22, 14, 4, 0, 0, Math.PI * 2); ctx.fill();
+  drawBodyParts(ctx, p, ({ legSwing }) => {
+    // Ноги
     ctx.fillStyle = '#111827';
     ctx.fillRect(-7 + legSwing, 12, 5, 14);
     ctx.fillRect(2 - legSwing, 12, 5, 14);
     ctx.fillStyle = '#0f172a';
     ctx.fillRect(-8 + legSwing, 24, 7, 4);
     ctx.fillRect(1 - legSwing, 24, 7, 4);
+    // Торс
     ctx.fillStyle = lin(ctx, -10, -8, 10, 16, '#2563eb', '#0f172a');
     rr(ctx, -9, -8, 18, 24, 4); ctx.fill();
     line(ctx, 0, -8, 0, 16, '#1e3a8a', 1);
+    // Руки
     ctx.fillStyle = '#1e3a8a';
     ctx.fillRect(-11, -6, 4, 16);
     ctx.fillRect(7, -6, 4, 16);
+    // Голова
     ctx.fillStyle = rad(ctx, 0, -18, 8, '#fde4c4', '#d4a574');
     ctx.beginPath(); ctx.arc(0, -18, 7, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#4a2f1a';
     ctx.beginPath(); ctx.arc(0, -20, 7, Math.PI, 0); ctx.fill();
-    const ex = Math.cos(p.angle || 0) * 2;
-    const ey = Math.sin(p.angle || 0) * 2;
+    const ex = Math.cos(p.angle || 0) * 2, ey = Math.sin(p.angle || 0) * 2;
     ctx.fillStyle = '#111';
     ctx.beginPath(); ctx.arc(ex, -18 + ey, 1.4, 0, Math.PI * 2); ctx.fill();
+    // Пистолет
     ctx.save();
     ctx.translate(9, 2);
     ctx.rotate(p.angle || 0);
@@ -112,9 +92,7 @@ function drawSurvivorBase(ctx, p, time) {
 }
 
 function drawAttackerBase(ctx, p, time) {
-  drawAnimatedBody(ctx, p, time, ({ legSwing }) => {
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    ctx.beginPath(); ctx.ellipse(0, 20, 12, 4, 0, 0, Math.PI * 2); ctx.fill();
+  drawBodyParts(ctx, p, ({ legSwing }) => {
     ctx.fillStyle = '#0f5132';
     ctx.fillRect(-6 + legSwing, 10, 5, 13);
     ctx.fillRect(2 - legSwing, 10, 5, 13);
@@ -123,7 +101,6 @@ function drawAttackerBase(ctx, p, time) {
     ctx.fillStyle = rad(ctx, 0, -14, 7, '#65a30d', '#365314');
     ctx.beginPath(); ctx.arc(0, -14, 6.5, 0, Math.PI * 2); ctx.fill();
     const atk = p.anim && p.anim.attackTimer > 0 ? 4 : 0;
-    ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 1.5;
     for (let i = 0; i < 3; i++) {
       line(ctx, -9, -2 + i * 2, -14 - atk, -3 + i * 3, '#fbbf24', 1.5);
       line(ctx, 9, -2 + i * 2, 14 + atk, -3 + i * 3, '#fbbf24', 1.5);
@@ -131,17 +108,12 @@ function drawAttackerBase(ctx, p, time) {
     const ex = Math.cos(p.angle || 0) * 2, ey = Math.sin(p.angle || 0) * 2;
     ctx.fillStyle = '#ff3030';
     ctx.beginPath(); ctx.arc(ex, -14 + ey, 1.5, 0, Math.PI * 2); ctx.fill();
-    if (atk > 0) {
-      ctx.fillStyle = 'rgba(239,68,68,0.5)';
-      circle(ctx, 0, 0, 20);
-    }
+    if (atk > 0) { ctx.fillStyle = 'rgba(239,68,68,0.5)'; circle(ctx, 0, 0, 20); }
   });
 }
 
 function drawTankBase(ctx, p, time) {
-  drawAnimatedBody(ctx, p, time, ({ legSwing }) => {
-    ctx.fillStyle = 'rgba(0,0,0,0.4)';
-    ctx.beginPath(); ctx.ellipse(0, 28, 20, 5, 0, 0, Math.PI * 2); ctx.fill();
+  drawBodyParts(ctx, p, ({ legSwing }) => {
     ctx.fillStyle = '#3f3f46';
     ctx.fillRect(-10 + legSwing * 0.5, 12, 8, 16);
     ctx.fillRect(2 - legSwing * 0.5, 12, 8, 16);
@@ -162,9 +134,7 @@ function drawTankBase(ctx, p, time) {
 }
 
 function drawSupportBase(ctx, p, time) {
-  drawAnimatedBody(ctx, p, time, ({ legSwing }) => {
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.beginPath(); ctx.ellipse(0, 18, 11, 3, 0, 0, Math.PI * 2); ctx.fill();
+  drawBodyParts(ctx, p, ({ legSwing }) => {
     ctx.fillStyle = lin(ctx, -10, -6, 10, 16, '#7c3aed', '#4c1d95');
     poly(ctx, [[-9 + legSwing * 0.3, 16], [9 - legSwing * 0.3, 16], [7, -6], [-7, -6]]); ctx.fill();
     ctx.fillStyle = rad(ctx, 0, -16, 7, '#a78bfa', '#6d28d9');
@@ -181,9 +151,10 @@ function drawSupportBase(ctx, p, time) {
   });
 }
 
-// ============ 120 РЕНДЕРЕРОВ ============
-// ВЫЖИВШИЙ (30)
-PART_RENDERERS["hat_01"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x, p.y - 22); ctx.fillStyle = lin(ctx, -9, -4, 9, 4, '#78350f', '#1c0a00'); rr(ctx, -9, -4, 18, 8, 2); ctx.fill(); ctx.fillStyle = '#451a03'; rr(ctx, -11, 2, 22, 2, 1); ctx.fill(); ctx.restore(); };
+// ============ 120 РЕНДЕРЕРОВ (без изменений — работают в локальных координатах) ============
+// Все PART_RENDERERS используют p.x/p.y, которые при lp={...player,x:0,y:0} становятся 0.
+// Поэтому ctx.translate(p.x, p.y) → translate(0,0) = no-op; всё рисуется локально.
+PART_RENDERERS["hat_01"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y - 22); ctx.fillStyle = lin(ctx, -9, -4, 9, 4, '#78350f', '#1c0a00'); rr(ctx, -9, -4, 18, 8, 2); ctx.fill(); ctx.fillStyle = '#451a03'; rr(ctx, -11, 2, 22, 2, 1); ctx.fill(); ctx.restore(); };
 PART_RENDERERS["torso_jacket"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = lin(ctx, -10, -8, 10, 16, '#7c2d12', '#431407'); rr(ctx, -10, -8, 20, 24, 4); ctx.fill(); line(ctx, -8, -6, 0, 10, '#1c0a00', 1); line(ctx, 8, -6, 0, 10, '#1c0a00', 1); ctx.restore(); };
 PART_RENDERERS["boots_sprint"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x, p.y); const g = 0.5 + Math.sin(t * 0.005) * 0.3; ctx.fillStyle = `rgba(59,130,246,${g})`; ctx.fillRect(-8, 24, 6, 6); ctx.fillRect(2, 24, 6, 6); ctx.restore(); };
 PART_RENDERERS["helmet_tactical"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = lin(ctx, -8, -28, 8, -18, '#4b5563', '#1f2937'); rr(ctx, -8, -28, 16, 10, 3); ctx.fill(); ctx.fillStyle = 'rgba(34,211,238,0.6)'; rr(ctx, -7, -24, 14, 3, 1); ctx.fill(); ctx.restore(); };
@@ -213,8 +184,6 @@ PART_RENDERERS["smoke_barrel"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x 
 PART_RENDERERS["crit_flash"] = (ctx, p, t, s) => { if (!s?.isAttacking) return; ctx.save(); ctx.translate(p.x + 22, p.y); const f = 0.7 + Math.sin(t * 0.04) * 0.3; ctx.fillStyle = `rgba(250,204,21,${f})`; poly(ctx, [[0, -8], [4, -2], [10, 0], [4, 2], [0, 8], [-4, 2], [-10, 0], [-4, -2]]); ctx.fill(); ctx.restore(); };
 PART_RENDERERS["rocket_signal"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x - 10, p.y - 20 - (t * 0.03) % 60); ctx.fillStyle = '#dc2626'; poly(ctx, [[0, -10], [5, 0], [3, 8], [-3, 8], [-5, 0]]); ctx.fill(); const f = 0.5 + Math.sin(t * 0.03) * 0.5; ctx.fillStyle = `rgba(251,146,60,${f})`; poly(ctx, [[-3, 8], [3, 8], [0, 20]]); ctx.fill(); ctx.restore(); };
 PART_RENDERERS["freeze_tint"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = 'rgba(96,165,250,0.18)'; circle(ctx, 0, 0, 22); ctx.strokeStyle = 'rgba(191,219,254,0.5)'; ctx.lineWidth = 1; for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2 + t * 0.001; line(ctx, Math.cos(a) * 15, Math.sin(a) * 15, Math.cos(a) * 20, Math.sin(a) * 20, 'rgba(191,219,254,0.5)', 1); } ctx.restore(); };
-
-// АТАКУЮЩИЙ (30)
 PART_RENDERERS["claws_sharp"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y); for (let i = 0; i < 3; i++) { line(ctx, -9, -2 + i * 2, -18, -4 + i * 3, '#f3f4f6', 2); line(ctx, 9, -2 + i * 2, 18, -4 + i * 3, '#f3f4f6', 2); } ctx.restore(); };
 PART_RENDERERS["claws_bloody"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x, p.y); for (let i = 0; i < 3; i++) { line(ctx, -9, -2 + i * 2, -18, -4 + i * 3, '#7f1d1d', 2); line(ctx, 9, -2 + i * 2, 18, -4 + i * 3, '#7f1d1d', 2); } ctx.fillStyle = 'rgba(220,38,38,0.9)'; for (let i = 0; i < 4; i++) { const y = (t * 0.04 + i * 30) % 40; circle(ctx, -16, 6 + y * 0.5, 1.5); } ctx.restore(); };
 PART_RENDERERS["claws_poison"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x, p.y); for (let i = 0; i < 3; i++) { line(ctx, -9, -2 + i * 2, -18, -4 + i * 3, '#4ade80', 2); line(ctx, 9, -2 + i * 2, 18, -4 + i * 3, '#4ade80', 2); } const f = 0.5 + Math.sin(t * 0.01) * 0.5; ctx.fillStyle = `rgba(74,222,128,${f})`; circle(ctx, -16, 8, 2); circle(ctx, 16, 8, 2); ctx.restore(); };
@@ -245,8 +214,6 @@ PART_RENDERERS["threads_blood"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x
 PART_RENDERERS["aura_revive_green"] = (ctx, p, t) => { if (p.alive) return; aura(ctx, p, t, 74, 222, 128, 30, 0.8); };
 PART_RENDERERS["bone_counter"] = (ctx, p) => { ctx.save(); ctx.translate(p.x - 12, p.y + 8); ctx.fillStyle = '#fafaf9'; for (let i = 0; i < 3; i++) ctx.fillRect(-1 + i * 4, -1, 2, 5); ctx.restore(); };
 PART_RENDERERS["headband_red"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y - 20); ctx.fillStyle = '#dc2626'; rr(ctx, -8, -2, 16, 3, 1); ctx.fill(); line(ctx, 8, -1, 14, -3, '#dc2626', 2); ctx.restore(); };
-
-// ТАНК (30)
 PART_RENDERERS["shield_bigger"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = lin(ctx, -30, -12, -18, 20, '#78716c', '#27272a'); ctx.strokeStyle = '#18181b'; ctx.lineWidth = 2; rr(ctx, -32, -14, 14, 34, 4); ctx.fill(); ctx.stroke(); ctx.restore(); };
 PART_RENDERERS["shield_spiked"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = '#52525b'; rr(ctx, -26, -8, 10, 24, 3); ctx.fill(); ctx.fillStyle = '#a8a29e'; for (let i = 0; i < 4; i++) { poly(ctx, [[-26, -6 + i * 6], [-34, -4 + i * 6], [-26, -2 + i * 6]]); ctx.fill(); } ctx.restore(); };
 PART_RENDERERS["plates_bone"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = '#f5f5f4'; ctx.strokeStyle = '#a8a29e'; ctx.lineWidth = 1; for (let i = 0; i < 3; i++) { rr(ctx, -12 + i * 2, -8 + i * 6, 24 - i * 4, 5, 2); ctx.fill(); ctx.stroke(); } ctx.restore(); };
@@ -277,8 +244,6 @@ PART_RENDERERS["helm_closed"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y
 PART_RENDERERS["body_heavy_lean"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = 'rgba(63,63,70,0.5)'; poly(ctx, [[-16, 20], [16, 20], [20, -8], [-20, -8]]); ctx.fill(); ctx.restore(); };
 PART_RENDERERS["shield_repair"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x - 21, p.y); const f = 0.5 + Math.sin(t * 0.006) * 0.5; ctx.strokeStyle = `rgba(74,222,128,${f})`; ctx.lineWidth = 2; rr(ctx, -6, -12, 12, 24, 3); ctx.stroke(); line(ctx, -3, -8, 3, -2, `rgba(74,222,128,${f})`, 2); ctx.restore(); };
 PART_RENDERERS["body_massive"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = 'rgba(82,82,91,0.35)'; rr(ctx, -19, -16, 38, 34, 7); ctx.fill(); ctx.restore(); };
-
-// ПОМОГАЮЩИЙ (30)
 PART_RENDERERS["crystal_green_hand"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x + 12, p.y + 2); const f = 0.6 + Math.sin(t * 0.008) * 0.4; ctx.shadowColor = '#4ade80'; ctx.shadowBlur = 10; ctx.fillStyle = `rgba(74,222,128,${f})`; poly(ctx, [[0, -8], [5, 0], [0, 8], [-5, 0]]); ctx.fill(); ctx.shadowBlur = 0; ctx.restore(); };
 PART_RENDERERS["threads_green_ally"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x, p.y); for (let i = 0; i < 5; i++) { const a = (i / 5) * Math.PI * 2 + Math.sin(t * 0.002) * 0.3; ctx.strokeStyle = 'rgba(74,222,128,0.5)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(Math.cos(a) * 20, Math.sin(a) * 20 + 5, Math.cos(a) * 50, Math.sin(a) * 50); ctx.stroke(); } ctx.restore(); };
 PART_RENDERERS["fog_green_poison"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x, p.y + 10); for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2 + t * 0.001; ctx.fillStyle = `rgba(74,222,128,${0.15 + Math.sin(t * 0.005 + i) * 0.05})`; circle(ctx, Math.cos(a) * 25, Math.sin(a) * 15, 22); } ctx.restore(); };
@@ -310,20 +275,18 @@ PART_RENDERERS["crystal_blue_chest"] = (ctx, p, t) => { ctx.save(); ctx.translat
 PART_RENDERERS["mantle_violet"] = (ctx, p) => { ctx.save(); ctx.translate(p.x, p.y); ctx.fillStyle = 'rgba(168,85,247,0.6)'; poly(ctx, [[-12, -6], [12, -6], [15, 22], [-15, 22]]); ctx.fill(); ctx.strokeStyle = '#7c3aed'; ctx.lineWidth = 1; poly(ctx, [[-12, -6], [12, -6], [15, 22], [-15, 22]]); ctx.stroke(); ctx.restore(); };
 PART_RENDERERS["fog_red_teamrage"] = (ctx, p, t) => { ctx.save(); ctx.translate(p.x, p.y); for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2 + t * 0.001; ctx.fillStyle = `rgba(220,38,38,${0.12 + Math.sin(t * 0.005 + i) * 0.05})`; circle(ctx, Math.cos(a) * 30, Math.sin(a) * 20, 28); } ctx.restore(); };
 
-// ============ FIX 5: База ============
+// ============ База ============
 export function drawBase(ctx, base, time) {
   if (!base) return;
   ctx.save();
   ctx.translate(base.x, base.y);
   ctx.fillStyle = 'rgba(0,0,0,0.4)';
   ctx.beginPath(); ctx.ellipse(0, 70, 100, 25, 0, 0, Math.PI * 2); ctx.fill();
-
   const destroyed = base.hp <= 0;
   ctx.fillStyle = destroyed ? '#3f3f46' : lin(ctx, -60, -60, 60, 60, '#a8a29e', '#57534e');
   ctx.fillRect(-60, -60, 120, 120);
   ctx.strokeStyle = '#1c1917'; ctx.lineWidth = 3;
   ctx.strokeRect(-60, -60, 120, 120);
-
   ctx.strokeStyle = 'rgba(24,24,27,0.7)'; ctx.lineWidth = 1.5;
   for (let i = 0; i < 5; i++) {
     const n = (i * 73856093) & 0x7fffffff;
@@ -332,11 +295,8 @@ export function drawBase(ctx, base, time) {
     ctx.lineTo(x0 + (n % 20) - 10, y0 + (n >> 4) % 30);
     ctx.stroke();
   }
-
-  ctx.fillStyle = '#292524';
-  ctx.fillRect(-12, -110, 24, 55);
-  ctx.fillStyle = '#44403c';
-  ctx.fillRect(-18, -112, 36, 6);
+  ctx.fillStyle = '#292524'; ctx.fillRect(-12, -110, 24, 55);
+  ctx.fillStyle = '#44403c'; ctx.fillRect(-18, -112, 36, 6);
   const ang = time * 0.001;
   ctx.save(); ctx.translate(0, -95); ctx.rotate(ang);
   ctx.fillStyle = '#fef3c7';
@@ -347,15 +307,12 @@ export function drawBase(ctx, base, time) {
   ctx.fillStyle = g;
   poly(ctx, [[5, -4], [100, -40], [100, 40], [5, 4]]); ctx.fill();
   ctx.restore();
-
-  ctx.fillStyle = '#a8a29e';
-  ctx.strokeStyle = '#57534e'; ctx.lineWidth = 1;
+  ctx.fillStyle = '#a8a29e'; ctx.strokeStyle = '#57534e'; ctx.lineWidth = 1;
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2;
     const x = Math.cos(a) * 72, y = Math.sin(a) * 72;
     rr(ctx, x - 10, y - 6, 20, 12, 3); ctx.fill(); ctx.stroke();
   }
-
   const pct = Math.max(0, Math.min(1, base.hp / base.maxHp));
   const barW = 100, barH = 8;
   ctx.fillStyle = 'rgba(0,0,0,0.7)';
@@ -367,7 +324,6 @@ export function drawBase(ctx, base, time) {
   ctx.strokeRect(-barW / 2, -130, barW, barH);
   ctx.fillStyle = '#fff'; ctx.font = '11px monospace'; ctx.textAlign = 'center';
   ctx.fillText(`${Math.round(base.hp)}/${base.maxHp}`, 0, -134);
-
   if (destroyed) {
     for (let i = 0; i < 4; i++) {
       const t0 = (time * 0.002 + i * 0.25) % 1;
@@ -380,16 +336,12 @@ export function drawBase(ctx, base, time) {
   ctx.restore();
 }
 
-// ============ Главный API ============
 export function getPartsForPlayer(player) {
   if (!player) return [];
   if (player.visualLayers && player.visualLayers.length) return player.visualLayers;
   const parts = [];
-  const list = Array.isArray(player.upgrades) ? player.upgrades : Object.values(player.upgrades || {});
-  for (const up of list) {
-    if (up && up.visual && up.visual.part) {
-      parts.push({ part: up.visual.part, layer: up.visual.layer || 5 });
-    }
+  for (const up of player.upgrades || []) {
+    if (up?.visual?.part) parts.push({ part: up.visual.part, layer: up.visual.layer ?? 5 });
   }
   if (parts.length === 0 && player.visualParts) {
     for (const part of player.visualParts) parts.push({ part, layer: 5 });
@@ -397,22 +349,84 @@ export function getPartsForPlayer(player) {
   return parts.sort((a, b) => a.layer - b.layer);
 }
 
+// BUG1-FIX1/3: ОДИН translate на весь drawPlayer, все части — в локальных координатах.
 export function drawPlayer(ctx, player, time, state = {}) {
   if (!player) return;
-  switch (player.role) {
-    case 'survivor':        drawSurvivorBase(ctx, player, time); break;
-    case 'zombie_attacker': drawAttackerBase(ctx, player, time); break;
-    case 'zombie_tank':     drawTankBase(ctx, player, time); break;
-    case 'zombie_support':  drawSupportBase(ctx, player, time); break;
-    default:                drawSurvivorBase(ctx, player, time);
+
+  const anim = player.anim || { walkPhase: 0, attackTimer: 0, hurtTimer: 0, deathTimer: 0 };
+  const isDead = !player.alive;
+  const walking = Math.hypot(player.vx || 0, player.vy || 0) > 5;
+  const wp = anim.walkPhase || 0;
+
+  const idleBob = Math.sin(time * 0.003) * 1.5;
+  const bodyTilt = walking ? Math.sin(wp * 2) * 0.05 : 0;
+  let lunge = 0;
+  if (anim.attackTimer > 0) {
+    const prog = 1 - anim.attackTimer / 150;
+    lunge = prog < 0.4 ? -prog * 8 : (prog - 0.4) * 15;
   }
+  const hurtShake = anim.hurtTimer > 0 ? Math.sin(time * 0.05) * 3 : 0;
+
+  // BUG1-FIX3: тень отдельно (в мировых координатах, не под наклоном тела)
+  const sh = SHADOW_SIZES[player.role] || SHADOW_SIZES.survivor;
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath();
+  ctx.ellipse(player.x, player.y + sh.y, sh.rx, sh.ry, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  ctx.translate(player.x, player.y);
+
+  if (isDead && anim.deathTimer > 0) {
+    ctx.globalAlpha = Math.max(0.3, anim.deathTimer / 500);
+    ctx.rotate((1 - anim.deathTimer / 500) * Math.PI / 2);
+  }
+
+  ctx.translate(
+    Math.cos(player.angle || 0) * lunge + hurtShake,
+    idleBob + Math.sin(player.angle || 0) * lunge
+  );
+  ctx.rotate(bodyTilt);
+
+  // BUG1-FIX1: передаём lp с x=0,y=0, чтобы все PART_RENDERERS рисовали локально
+  const lp = { ...player, x: 0, y: 0 };
+
+  switch (player.role) {
+    case 'survivor':        drawSurvivorBase(ctx, lp, time); break;
+    case 'zombie_attacker': drawAttackerBase(ctx, lp, time); break;
+    case 'zombie_tank':     drawTankBase(ctx, lp, time); break;
+    case 'zombie_support':  drawSupportBase(ctx, lp, time); break;
+    default:                drawSurvivorBase(ctx, lp, time);
+  }
+
+  // BUG1-FIX3: детали в порядке layer
   const parts = getPartsForPlayer(player);
   for (const { part } of parts) {
     const fn = PART_RENDERERS[part];
     if (fn) {
       ctx.save();
-      try { fn(ctx, player, time, state); } catch (e) { console.error('[PART]', part, e); }
+      try { fn(ctx, lp, time, state); } catch (e) { console.error('[PART]', part, e); }
       ctx.restore();
     }
   }
+  ctx.restore();
+
+  // FIX: hurt overlay (в мировых координатах)
+  if (anim.hurtTimer > 0) {
+    ctx.save();
+    ctx.globalAlpha = (anim.hurtTimer / 200) * 0.5;
+    ctx.fillStyle = '#ff2222';
+    ctx.beginPath();
+    ctx.arc(player.x, player.y - 5, 25, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // BUG1-FIX8: отладочный маркер (раскомментируйте для проверки)
+  // ctx.strokeStyle = 'lime'; ctx.lineWidth = 2;
+  // ctx.strokeRect(player.x - 15, player.y - 30, 30, 50);
+  // ctx.fillStyle = 'red';
+  // ctx.beginPath(); ctx.arc(player.x, player.y - 18, 3, 0, Math.PI * 2); ctx.fill();
 }
