@@ -1,3 +1,62 @@
+// js/ui.js
+// Все функции экспортируются. showUpgradeScreen использует addEventListener, без onclick.
+const SCREENS = ['menu-screen','lobby-screen','upgrade-screen','game-screen','end-screen'];
+
+export function showScreen(id) {
+  SCREENS.forEach(s => {
+    const el = document.getElementById(s);
+    if (el) el.style.display = (s === id ? 'block' : 'none');
+  });
+  window.__currentScreen = id;
+}
+
+export function formatRole(role) {
+  switch (role) {
+    case 'survivor': return 'Выживший';
+    case 'zombie_attacker': return 'Атакующий зомби';
+    case 'zombie_tank': return 'Танк-зомби';
+    case 'zombie_support': return 'Помогающий зомби';
+    default: return role || '—';
+  }
+}
+
+function formatSlot(slot) {
+  return slot === 'main' ? 'Основная атака'
+    : slot === 'secondary' ? 'Второстепенная'
+    : slot === 'passive' ? 'Пассивный бафф' : slot;
+}
+
+export function updateLobby(room, uid) {
+  const list = document.getElementById('lobby-players');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!room?.players) return;
+  for (const [pid, p] of Object.entries(room.players)) {
+    const li = document.createElement('li');
+    const isHost = room.host === pid;
+    const isYou  = pid === uid;
+    const ready  = p.upgradeSubmitted ? ' ✅' : '';
+    li.textContent = `${p.name || 'Аноним'}${isYou ? ' (вы)' : ''}${isHost ? ' 👑' : ''} — ${formatRole(p.role)}${ready}`;
+    if (isYou) li.style.background = '#25304a';
+    list.appendChild(li);
+  }
+}
+
+export function updateLobbyStatus(text) {
+  const el = document.getElementById('lobby-status');
+  if (el) el.textContent = text || '';
+}
+
+export function enableStartButton(enabled) {
+  const btn = document.getElementById('start-btn');
+  if (btn) btn.disabled = !enabled;
+}
+
+export function setRoomIdDisplay(roomId) {
+  const el = document.getElementById('lobby-room-id');
+  if (el) el.textContent = roomId || '—';
+}
+
 export function showUpgradeScreen(role, choices, onSubmit) {
   showScreen('upgrade-screen');
 
@@ -8,12 +67,9 @@ export function showUpgradeScreen(role, choices, onSubmit) {
   listEl.innerHTML = '';
 
   const selections = {};
-
-  // UI-FIX: ссылка на кнопку определяем СРАЗУ, до создания карточек
   let confirmBtn = document.getElementById('upgrade-submit');
 
-  // UI-FIX: checkReady объявлена в области видимости showUpgradeScreen,
-  // поэтому доступна и из card.onclick, и из обработчика кнопки.
+  // checkReady в области видимости showUpgradeScreen — доступна из карточек и кнопки
   const checkReady = () => {
     if (!confirmBtn) return;
     const slots = Object.keys(choices);
@@ -21,9 +77,7 @@ export function showUpgradeScreen(role, choices, onSubmit) {
     const allFilled = slots.every(slot => !!selections[slot]);
     confirmBtn.disabled = !allFilled;
   };
-
-  // UI-FIX: страховка — если где-то в HTML остался inline onclick="checkReady()",
-  // он сможет найти функцию в window.
+  // Страховка на случай внешних inline-onclick
   window.checkReady = checkReady;
 
   for (const [slot, upgrades] of Object.entries(choices)) {
@@ -45,8 +99,6 @@ export function showUpgradeScreen(role, choices, onSubmit) {
       card.dataset.id = upg.id;
       card.style.cssText = 'flex: 1 1 200px; padding: 10px; background: #2a2a3a; color: #fff; border: 2px solid transparent; border-radius: 6px; text-align: left; cursor: pointer; font-size: 14px';
       card.innerHTML = `<b>${upg.title}</b><br><span style="color:#999;font-size:12px">${upg.description || ''}</span>`;
-
-      // UI-FIX: addEventListener вместо onclick + вызов checkReady из замыкания
       card.addEventListener('click', () => {
         cardsDiv.querySelectorAll('button').forEach(b => b.style.borderColor = 'transparent');
         card.style.borderColor = '#4ade80';
@@ -65,13 +117,9 @@ export function showUpgradeScreen(role, choices, onSubmit) {
   if (confirmBtn) {
     const clone = confirmBtn.cloneNode(true);
     clone.disabled = true;
+    clone.removeAttribute('onclick');
     confirmBtn.parentNode.replaceChild(clone, confirmBtn);
     confirmBtn = clone;
-
-    // UI-FIX: на всякий случай убираем inline onclick, если он был унаследован от HTML
-    confirmBtn.removeAttribute('onclick');
-
-    // UI-FIX: навешиваем addEventListener вместо onclick-атрибута
     confirmBtn.addEventListener('click', () => {
       const ids = Object.values(selections).filter(Boolean);
       if (ids.length === 0) return;
@@ -81,4 +129,36 @@ export function showUpgradeScreen(role, choices, onSubmit) {
 
   const ta = document.getElementById('upgrade-input');
   if (ta) ta.style.display = 'none';
+}
+
+export function showUpgradeMessage(text, isError = false) {
+  const el = document.getElementById('upgrade-message');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = isError ? '#ff6b6b' : '#6bff95';
+}
+
+export function setUpgradeRole(role) {
+  const el = document.getElementById('upgrade-role');
+  if (el) el.textContent = formatRole(role);
+}
+
+export function setUpgradeProgress(text) {
+  const el = document.getElementById('upgrade-progress');
+  if (el) el.textContent = text || '';
+}
+
+export function showEndScreen(winner) {
+  showScreen('end-screen');
+  const t = document.getElementById('end-title');
+  if (!t) return;
+  if (winner === 'survivor') t.textContent = '🏆 Выживший победил!';
+  else if (winner === 'zombies') t.textContent = '🧟 Зомби победили!';
+  else t.textContent = 'Игра окончена';
+}
+
+// ← именно эту функцию импортирует game.js
+export function setGameStatus(text) {
+  const el = document.getElementById('game-status');
+  if (el) el.textContent = text || '';
 }
