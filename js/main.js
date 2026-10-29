@@ -1,5 +1,6 @@
 // js/main.js
-// BUG2-FIX3: хост генерирует upgradeChoices, все читают из Firebase.
+// RANDOM-FIX5: генерация upgradeChoices на хосте ПРИ КАЖДОМ старте раунда.
+// RANDOM-FIX6: excludes из player.upgradeIds (накопленные).
 import { ensureAuth, db, ref, update, get } from './firebase.js';
 import {
   createRoom, joinRoom, listenRoom, pickRoles, startGame, MAX_PLAYERS, MIN_PLAYERS
@@ -25,7 +26,6 @@ let currentRoomId = null;
 let unlistenRoom = null;
 let gameInstance = null;
 let startingGame = false;
-let choicesGenerated = false;
 
 async function init() {
   try {
@@ -69,12 +69,36 @@ function bindMenu() {
 
 async function enterRoom(roomId) {
   currentRoomId = roomId;
-  choicesGenerated = false;
   setRoomIdDisplay(roomId);
   showScreen('lobby-screen');
   bindStartButton();
   if (unlistenRoom) unlistenRoom();
   unlistenRoom = listenRoom(roomId, (room) => handleRoomUpdate(room, roomId));
+}
+
+// RANDOM-FIX5: единая функция запуска фазы улучшений
+async function startUpgradePhase(roomId) {
+  if (!generateUpgradeChoices) {
+    console.warn('[startUpgradePhase] generateUpgradeChoices недоступна, используем дефолты');
+  }
+  const snap = await get(ref(db, `rooms/${roomId}/players`));
+  const players = snap.val() || {};
+  const updates = {};
+  for (const [pid, p] of Object.entries(players)) {
+    const role = p.role || 'survivor';
+    const existingIds = Array.isArray(p.upgradeIds) ? p.upgradeIds : [];
+    let choices;
+    if (generateUpgradeChoices) {
+      choices = generateUpgradeChoices(role, existingIds, 2);
+    } else {
+      choices = { main: [], secondary: [], passive: [] };
+    }
+    updates[`players/${pid}/upgradeChoices`] = choices;
+    updates[`players/${pid}/upgradeSubmitted`] = false;
+    console.log('[startUpgradePhase]', pid, role, 'existing:', existingIds, '→ new:', choices);
+  }
+  updates.state = 'upgrade';
+  await update(ref(db, `rooms/${roomId}`), updates);
 }
 
 function bindStartButton() {
@@ -88,23 +112,7 @@ function bindStartButton() {
     clone.disabled = true;
     try {
       await pickRoles(currentRoomId);
-
-      // BUG2-FIX3: генерируем upgradeChoices для всех игроков на хосте
-      const snap = await get(ref(db, `rooms/${currentRoomId}/players`));
-      const players = snap.val() || {};
-      const updates = {};
-      if (generateUpgradeChoices) {
-        for (const [pid, p] of Object.entries(players)) {
-          const role = p.role || 'survivor';
-          const choices = generateUpgradeChoices(role, [], 2);
-          updates[`players/${pid}/upgradeChoices`] = choices;
-          updates[`players/${pid}/upgradeSubmitted`] = false;
-          updates[`players/${pid}/upgradeIds`] = null;
-        }
-      }
-      updates.state = 'upgrade';
-      await update(ref(db, `rooms/${currentRoomId}`), updates);
-      choicesGenerated = true;
+      await startUpgradePhase(currentRoomId);
     } catch (e) {
       alert('Ошибка старта: ' + (e?.message || e));
       clone.disabled = false;
@@ -142,8 +150,9 @@ async function handleRoomUpdate(room, roomId) {
       const role = me.role;
       const choices = {};
       for (const [slot, ids] of Object.entries(me.upgradeChoices)) {
-        choices[slot] = ids.map(id => getUpgradeById(id)).filter(Boolean);
+        choices[slot] = (ids || []).map(id => getUpgradeById(id)).filter(Boolean);
       }
+      console.log('[UI] rendering upgrade screen for', currentUid, 'choices=', choices);
       showUpgradeScreen(role, choices, async (selectedIds) => {
         await handleUpgradeConfirm(selectedIds);
       });
@@ -186,11 +195,15 @@ async function handleRoomUpdate(room, roomId) {
   }
 }
 
+// RANDOM-FIX6: накапливаем upgradeIds (не перезаписываем)
 async function handleUpgradeConfirm(selectedIds) {
   if (!currentRoomId || !currentUid) return;
   try {
+    const snap = await get(ref(db, `rooms/${currentRoomId}/players/${currentUid}`));
+    const existing = snap.val()?.upgradeIds || [];
+    const merged = [...new Set([...existing, ...selectedIds])];
     await update(ref(db, `rooms/${currentRoomId}/players/${currentUid}`), {
-      upgradeIds: selectedIds,
+      upgradeIds: merged,
       upgradeSubmitted: true
     });
     showUpgradeMessage('Улучшения приняты!', false);

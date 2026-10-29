@@ -1,5 +1,5 @@
 // js/zombieTypes.js
-// BUG1-FIX5: hitRadius для танка больше.
+// DAMAGE-FIX3: hitRadius для танка.
 import { Player } from './player.js';
 
 export class TankZombie extends Player {
@@ -8,10 +8,11 @@ export class TankZombie extends Player {
     this.maxHp *= 2; this.hp = this.maxHp;
     this.speed *= 0.6; this.maxSpeed = this.speed;
     this.damage *= 0.7;
-    this.hitRadius = 28; // BUG1-FIX5
+    this.hitRadius = 28;
     this.shield = true;
     this.style = { bodyColor: '#71717a', accentColor: '#52525b', eyeColor: '#fbbf24', shieldColor: '#52525b' };
     this.defaultUpgradeIds = ['tnk_main_01', 'tnk_sec_01', 'tnk_pas_01'];
+    this._lastSyncedHp = Math.round(this.hp);
   }
   absorbDamage(ally, amount) {
     if (!this.shield || !this.alive || !ally.alive) return 0;
@@ -28,9 +29,10 @@ export class AttackerZombie extends Player {
     this.speed *= 1.3; this.maxSpeed = this.speed;
     this.damage *= 1.5;
     this.attackSpeed = 1.5;
-    this.hitRadius = 18; // BUG1-FIX5
+    this.hitRadius = 18;
     this.style = { bodyColor: '#4d7c0f', accentColor: '#dc2626', eyeColor: '#ff3030', clawColor: '#fbbf24' };
     this.defaultUpgradeIds = ['att_main_01', 'att_sec_01', 'att_pas_01'];
+    this._lastSyncedHp = Math.round(this.hp);
   }
 }
 
@@ -40,9 +42,10 @@ export class SupportZombie extends Player {
     this.maxHp *= 0.8; this.hp = this.maxHp;
     this.damage *= 0.5;
     this.healCooldown = 0;
-    this.hitRadius = 18; // BUG1-FIX5
+    this.hitRadius = 18;
     this.style = { bodyColor: '#7c3aed', accentColor: '#4ade80', eyeColor: '#22d3ee', crystalColor: '#4ade80' };
     this.defaultUpgradeIds = ['sup_main_01', 'sup_sec_01', 'sup_pas_01'];
+    this._lastSyncedHp = Math.round(this.hp);
   }
   healAlly(ally, amount) {
     if (this.healCooldown > 0 || !ally.alive) return 0;

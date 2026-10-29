@@ -1,5 +1,7 @@
 // js/player.js
-// BUG1-FIX5: hitRadius по роли. BUG3-FIX3: takeDamage с защитой.
+// DAMAGE-FIX1: _lastSyncedHp / _lastSyncedAlive — для защиты от перезаписи урона.
+// DAMAGE-FIX2: takeDamage валидирует amount (не NaN/undefined).
+// DAMAGE-FIX3: hitRadius по роли.
 export class Player {
   constructor({
     id, name = 'Игрок', x = 0, y = 0,
@@ -12,7 +14,7 @@ export class Player {
     this.x = x; this.y = y;
     this.hp = hp; this.maxHp = maxHp;
     this.speed = speed;
-    this.damage = typeof damage === 'number' && damage > 0 ? damage : 25;
+    this.damage = typeof damage === 'number' && damage > 0 && !isNaN(damage) ? damage : 25;
     this.role = role;
     this.upgrade = upgrade;
     this.canvasW = canvasW; this.canvasH = canvasH;
@@ -21,14 +23,13 @@ export class Player {
     this._lastHit = 0;
     this._prevX = x; this._prevY = y;
 
-    // BUG1-FIX5: радиус попадания
+    // DAMAGE-FIX3: радиус попадания
     this.hitRadius = role === 'zombie_tank' ? 28 : 18;
 
     this.vx = 0; this.vy = 0;
     this.acceleration = 1800;
     this.maxSpeed = speed;
     this.friction = 0.85;
-
     this.attackSpeed = 2.0;
     this.anim = { walkPhase: 0, attackTimer: 0, hurtTimer: 0, deathTimer: 0 };
 
@@ -39,6 +40,10 @@ export class Player {
 
     if (upgrade) this.applyUpgrade(upgrade);
     this.refreshVisualLayers();
+
+    // DAMAGE-FIX1: отслеживание последнего синхронизированного состояния
+    this._lastSyncedHp = Math.round(this.hp);
+    this._lastSyncedAlive = this.alive;
   }
 
   updateMovement(dt, inputX, inputY) {
@@ -62,10 +67,17 @@ export class Player {
 
   triggerAttack() { this.anim.attackTimer = 150; }
 
-  // BUG3-FIX3: sourceRole защищает от «своих»
+  // DAMAGE-FIX2: валидация amount, защита от NaN
   takeDamage(amount, sourceRole) {
+    if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
+      console.warn('[takeDamage] invalid amount:', amount, 'for role:', this.role);
+      return this.alive;
+    }
     if (!this.alive) return false;
-    if (this.role === 'base' && sourceRole === 'survivor') return false;
+    if (this.role === 'base' && sourceRole === 'survivor') {
+      console.warn('[takeDamage] survivor→own base blocked');
+      return true;
+    }
     this.hp = Math.max(0, this.hp - amount);
     this.anim.hurtTimer = 200;
     if (this.hp <= 0) {
@@ -77,7 +89,7 @@ export class Player {
   }
 
   heal(amount) {
-    if (!this.alive) return 0;
+    if (!this.alive || typeof amount !== 'number' || amount <= 0) return 0;
     const before = this.hp;
     this.hp = Math.min(this.maxHp, this.hp + amount);
     return this.hp - before;
@@ -112,6 +124,8 @@ export class Player {
     this.maxHp = Math.max(10, this.maxHp);
     this.hp = Math.min(this.hp, this.maxHp);
     this.refreshVisualLayers();
+    // Обновляем _lastSyncedHp после пересчёта maxHp
+    this._lastSyncedHp = Math.round(this.hp);
   }
 
   getVisualParts() {

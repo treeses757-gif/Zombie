@@ -1,5 +1,5 @@
 // js/ui.js
-// BUG2-FIX4: карточки (2 на слот), клик для выбора, confirm.
+// RANDOM-FIX4: карточки из Firebase, не локально.
 const SCREENS = ['menu-screen','lobby-screen','upgrade-screen','game-screen','end-screen'];
 
 export function showScreen(id) {
@@ -57,7 +57,9 @@ export function setRoomIdDisplay(roomId) {
   if (el) el.textContent = roomId || '—';
 }
 
-// BUG2-FIX4: карточки по 2 на слот, выбор кликом
+// RANDOM-FIX4: карточки читаются из Firebase.
+// choices = { main: [upgradeObj, upgradeObj], secondary: [...], passive: [...] }
+// Или slots могут отсутствовать — показываем то, что есть.
 export function showUpgradeScreen(role, choices, onSubmit) {
   showScreen('upgrade-screen');
 
@@ -67,9 +69,10 @@ export function showUpgradeScreen(role, choices, onSubmit) {
   const listEl = document.getElementById('upgrade-list');
   listEl.innerHTML = '';
 
-  const selections = {}; // slot -> id
+  const selections = {};
 
   for (const [slot, upgrades] of Object.entries(choices)) {
+    if (!upgrades || upgrades.length === 0) continue;
     const slotDiv = document.createElement('div');
     slotDiv.style.cssText = 'margin: 12px 0; padding: 10px; background: #1a1a22; border-radius: 6px';
 
@@ -109,14 +112,15 @@ export function showUpgradeScreen(role, choices, onSubmit) {
     btn.parentNode.replaceChild(clone, btn);
 
     const checkReady = () => {
-      const allFilled = Object.keys(choices).every(slot => selections[slot]);
+      const slots = Object.keys(choices);
+      const allFilled = slots.every(slot => selections[slot]);
       clone.disabled = !allFilled;
     };
 
     clone.onclick = () => {
-      const allIds = Object.entries(selections).map(([_, id]) => id).filter(Boolean);
-      if (allIds.length === 0) return;
-      onSubmit(allIds);
+      const ids = Object.values(selections).filter(Boolean);
+      if (ids.length === 0) return;
+      onSubmit(ids);
     };
   }
 
