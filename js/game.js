@@ -1,14 +1,8 @@
 // js/game.js
-// DAMAGE-FIX4: syncMyState не перезаписывает hp (защита от гонки).
-// DAMAGE-FIX5: syncPlayer — единая точка, лог.
-// DAMAGE-FIX6: getValidTargetsFor с логами.
-// DAMAGE-FIX7: hitscanRay/Cone с логами и hitRadius.
-// DAMAGE-FIX8: onValue не перезаписывает локальный hp старым значением.
-// DAMAGE-FIX9: window.__testDmg для отладки.
+// CACHE-FIX: нет импорта ui.js; setGameStatus инлайнится в render().
 import { db, ref, update, onValue, get } from './firebase.js';
 import { Player } from './player.js';
 import { createZombie, roleToZombieType, createZombiesForPlayerCount } from './zombieTypes.js';
-import { setGameStatus } from './ui.js';
 import { drawPlayer, drawBase } from './spriteSystem.js';
 
 const WORLD_WIDTH = 4000;
@@ -18,7 +12,7 @@ const SYNC_INTERVAL_MS = 50;
 const SUPPORT_HEAL = 22;
 const BASE_ATTACK_RANGE = 40;
 const ROUND_DURATION_MS = 180000;
-const DEBUG = true; // логи в консоль (для продакшена выставить false)
+const DEBUG = false;
 
 let getUpgradeById = () => null;
 try {
@@ -32,7 +26,6 @@ function lerpAngle(a, b, t) {
 }
 const clamp = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
 
-// DAMAGE-FIX6: фильтр целей с логами
 function getValidTargetsFor(attacker, allPlayers) {
   const isAttSurvivor = attacker.role === 'survivor';
   const list = [];
@@ -42,7 +35,6 @@ function getValidTargetsFor(attacker, allPlayers) {
     const isTargetSurvivor = p.role === 'survivor';
     if (isAttSurvivor !== isTargetSurvivor) list.push(p);
   }
-  if (DEBUG) console.log('[targets]', attacker.id, attacker.role, '→', list.map(t => `${t.id}:${t.role}`));
   return list;
 }
 
@@ -95,7 +87,6 @@ export class Game {
     this.input.mouseY = this.canvas.height / 2;
     this.rafId = requestAnimationFrame((t) => this.loop(t));
 
-    // DAMAGE-FIX9: тестовая функция урона
     window.__testDmg = (targetId, amount = 10) => {
       const t = this.players.get(targetId);
       if (!t) return console.warn('[testDmg] no target', targetId);
@@ -103,7 +94,6 @@ export class Game {
       this.syncPlayer(t);
       console.log('[testDmg]', targetId, 'hp=', t.hp);
     };
-    if (DEBUG) console.log('[game] started. players:', [...this.players.keys()]);
   }
 
   stop() {
@@ -245,10 +235,8 @@ export class Game {
       p._prevX = p.x; p._prevY = p.y;
       p.refreshVisualLayers();
       this.players.set(pid, p);
-      if (DEBUG) console.log('[build]', pid, p.role, 'hp=', p.hp, 'alive=', p.alive);
     }
     this.myPlayer = this.players.get(this.uid) || null;
-    if (DEBUG) console.log('[game] myPlayer:', this.myPlayer?.id, this.myPlayer?.role);
   }
 
   async ensureBaseInFirebase() {
@@ -291,15 +279,8 @@ export class Game {
           p.targetY = data.pos.y;
           if (typeof data.pos.angle === 'number') p.targetAngle = data.pos.angle;
         }
-        // DAMAGE-FIX8: обновляем hp/alive, включая локального игрока (сервер = источник истины)
-        if (typeof data.hp === 'number') {
-          p.hp = data.hp;
-          p._lastSyncedHp = Math.round(data.hp);  // ← критично: чтобы syncMyState не перезаписал обратно
-        }
-        if (typeof data.alive === 'boolean') {
-          p.alive = data.alive;
-          p._lastSyncedAlive = data.alive;
-        }
+        if (typeof data.hp === 'number') { p.hp = data.hp; p._lastSyncedHp = Math.round(data.hp); }
+        if (typeof data.alive === 'boolean') { p.alive = data.alive; p._lastSyncedAlive = data.alive; }
       }
       const present = new Set(Object.keys(room.players || {}));
       for (const pid of [...this.players.keys()]) if (!present.has(pid)) this.players.delete(pid);
@@ -325,7 +306,6 @@ export class Game {
 
     if (winner) {
       this._winnerReported = true;
-      if (DEBUG) console.log('[game] winner:', winner);
       this.onFinish(winner);
     }
   }
@@ -399,7 +379,6 @@ export class Game {
     for (const tr of this.tracers) tr.ttl -= dt * 1000;
     this.tracers = this.tracers.filter(tr => tr.ttl > 0);
 
-    // Автоатака базы — только зомби
     for (const p of this.players.values()) {
       if (!p.alive) continue;
       if (!p.role || !p.role.startsWith('zombie_')) continue;
@@ -416,7 +395,6 @@ export class Game {
     this.checkWinCondition();
   }
 
-  // DAMAGE-FIX7: логи + hitRadius
   tryAttack(isSecondary) {
     const me = this.myPlayer;
     if (!me || !me.alive) return;
@@ -434,8 +412,6 @@ export class Game {
     me.triggerAttack();
 
     this.input.attackCooldown = 1000 / (me.attackSpeed || 1);
-
-    if (DEBUG) console.log('[fire]', me.id, me.role, 'pos=', me.x, me.y, 'aim=', this.input.mouseWorldX, this.input.mouseWorldY, 'ang=', ang.toFixed(2), 'dmg=', me.damage);
 
     if (me.role === 'survivor') {
       const range = 600;
@@ -470,11 +446,8 @@ export class Game {
       const proj = px * dx + py * dy;
       if (proj < 0 || proj > length) continue;
       const perp = Math.abs(px * dy - py * dx);
-      if (DEBUG) console.log('[hitcheck-ray]', t.id, 'proj=', proj.toFixed(1), 'perp=', perp.toFixed(1), 'hitR=', t.hitRadius);
       if (perp > (t.hitRadius || 20)) continue;
-      if (DEBUG) console.log('[HIT]', me.id, '→', t.id, 'dmg=', me.damage, 'hp_before=', t.hp);
       t.takeDamage(me.damage, me.role);
-      if (DEBUG) console.log('[HIT]', t.id, 'hp_after=', t.hp);
       this.syncPlayer(t);
       return;
     }
@@ -488,17 +461,13 @@ export class Game {
       if (dist > radius + (t.hitRadius || 20)) continue;
       const a = Math.atan2(dy, dx);
       let diff = ((a - ang + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-      if (DEBUG) console.log('[hitcheck-cone]', t.id, 'dist=', dist.toFixed(1), 'diff=', diff.toFixed(2), 'halfAngle=', halfAngle.toFixed(2));
       if (Math.abs(diff) > halfAngle) continue;
-      if (DEBUG) console.log('[HIT]', me.id, '→', t.id, 'dmg=', (me.damage * mult).toFixed(1), 'hp_before=', t.hp);
       t.takeDamage(me.damage * mult, me.role);
-      if (DEBUG) console.log('[HIT]', t.id, 'hp_after=', t.hp);
       this.syncPlayer(t);
       return;
     }
   }
 
-  // Защита базы от выжившего
   damageBase(amount, attacker) {
     if (attacker && (attacker.role === 'survivor' || attacker.id === this.roomData?.survivorId)) {
       console.warn('[damageBase] survivor→own base blocked');
@@ -508,8 +477,6 @@ export class Game {
     update(ref(db, `rooms/${this.roomId}/base`), { hp: Math.round(newHp), alive: newHp > 0 }).catch(() => {});
   }
 
-  // DAMAGE-FIX4: syncMyState НЕ перезаписывает hp, если оно не менялось локально.
-  // Иначе цель с устаревшим локальным hp перезатирает урон, нанесённый атакующим.
   syncMyState() {
     if (!this.myPlayer) return;
     const payload = {
@@ -521,7 +488,6 @@ export class Game {
     };
     const hp = Math.round(this.myPlayer.hp);
     const alive = this.myPlayer.alive;
-    // Пишем hp только если он изменился с прошлой синхронизации
     if (hp !== this.myPlayer._lastSyncedHp) {
       payload.hp = hp;
       this.myPlayer._lastSyncedHp = hp;
@@ -533,13 +499,10 @@ export class Game {
     update(ref(db, `rooms/${this.roomId}/players/${this.uid}`), payload).catch(() => {});
   }
 
-  // DAMAGE-FIX5: единая точка записи hp цели
   syncPlayer(p) {
-    if (DEBUG) console.log('[sync]', p.id, 'hp=', Math.round(p.hp), 'alive=', p.alive);
     update(ref(db, `rooms/${this.roomId}/players/${p.id}`), {
       hp: Math.round(p.hp), alive: p.alive
     }).catch(() => {});
-    // Локально обновляем маркер, чтобы не перезаписать
     p._lastSyncedHp = Math.round(p.hp);
     p._lastSyncedAlive = p.alive;
   }
@@ -625,12 +588,16 @@ export class Game {
 
     this.renderMinimap();
 
+    // CACHE-FIX: setGameStatus инлайн, без импорта из ui.js
     if (this.myPlayer) {
       const me = this.myPlayer;
       const rl = me.role === 'survivor' ? 'Выживший' : me.role === 'zombie_tank' ? 'Танк' :
         me.role === 'zombie_attacker' ? 'Атакующий' : me.role === 'zombie_support' ? 'Помогающий' : me.role;
       const baseHp = Math.round(this.base?.hp ?? 1000);
-      setGameStatus(`${rl} | HP: ${Math.round(me.hp)}/${Math.round(me.maxHp)} | База: ${baseHp} | ЛКМ/Space — атака`);
+      const statusEl = document.getElementById('game-status');
+      if (statusEl) {
+        statusEl.textContent = `${rl} | HP: ${Math.round(me.hp)}/${Math.round(me.maxHp)} | База: ${baseHp} | ЛКМ/Space — атака`;
+      }
     }
   }
 }
