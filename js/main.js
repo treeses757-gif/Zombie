@@ -1,6 +1,7 @@
 // js/main.js
-// CACHE-FIX: импорты game.js и ui.js с ?v=2 — Chrome скачает свежие версии.
-import { ensureAuth, db, ref, update, get } from './firebase.js';
+// AUTH-FIX: перед createRoom/joinRoom проверяем auth.currentUser,
+// если null — повторно логинимся (Chrome/приватное окно сбрасывает сессию).
+import { ensureAuth, auth, db, ref, update, get } from './firebase.js';
 import {
   createRoom, joinRoom, listenRoom, pickRoles, startGame, MAX_PLAYERS, MIN_PLAYERS
 } from './rooms.js';
@@ -26,13 +27,30 @@ let unlistenRoom = null;
 let gameInstance = null;
 let startingGame = false;
 
+// AUTH-FIX: гарантирует, что auth.currentUser установлен ДО вызова rooms.js
+async function ensureAuthReady() {
+  if (auth.currentUser?.uid) {
+    currentUid = auth.currentUser.uid;
+    return currentUid;
+  }
+  console.log('[auth] currentUser null, повторный ensureAuth...');
+  const user = await ensureAuth();
+  // Дать Firebase Auth микротакт на установку currentUser
+  await new Promise(r => setTimeout(r, 50));
+  currentUid = auth.currentUser?.uid || user.uid;
+  console.log('[auth] после ensureAuth currentUid=', currentUid, 'auth.currentUser=', auth.currentUser?.uid);
+  return currentUid;
+}
+
 async function init() {
   try {
     const user = await ensureAuth();
     currentUid = user.uid;
+    console.log('[auth] init OK, uid=', currentUid);
     showScreen('menu-screen');
     bindMenu();
   } catch (e) {
+    console.error('[auth] init error:', e);
     alert('Ошибка авторизации: ' + (e?.message || e));
   }
 }
@@ -47,10 +65,26 @@ function bindMenu() {
     const name = ((nameInput?.value || '').trim().slice(0, 16)) || 'Игрок';
     createBtn.disabled = true;
     try {
+      await ensureAuthReady();          // AUTH-FIX
       const res = await createRoom(name);
       await enterRoom(res.roomId);
-    } catch (e) { alert('Не удалось создать комнату: ' + (e?.message || e)); }
-    finally { createBtn.disabled = false; }
+    } catch (e) {
+      console.error('[createRoom] error:', e);
+      // AUTH-FIX: одноразовый retry при потере сессии
+      if (String(e?.message || '').includes('Нет авторизации')) {
+        try {
+          await ensureAuthReady();
+          const res = await createRoom(name);
+          await enterRoom(res.roomId);
+          return;
+        } catch (e2) {
+          console.error('[createRoom] retry failed:', e2);
+          alert('Не удалось создать комнату: ' + (e2?.message || e2));
+          return;
+        }
+      }
+      alert('Не удалось создать комнату: ' + (e?.message || e));
+    } finally { createBtn.disabled = false; }
   });
 
   joinBtn.addEventListener('click', async () => {
@@ -59,10 +93,26 @@ function bindMenu() {
     if (!roomId) return alert('Введите ID комнаты');
     joinBtn.disabled = true;
     try {
+      await ensureAuthReady();          // AUTH-FIX
       await joinRoom(roomId, name);
       await enterRoom(roomId);
-    } catch (e) { alert('Не удалось присоединиться: ' + (e?.message || e)); }
-    finally { joinBtn.disabled = false; }
+    } catch (e) {
+      console.error('[joinRoom] error:', e);
+      // AUTH-FIX: одноразовый retry при потере сессии
+      if (String(e?.message || '').includes('Нет авторизации')) {
+        try {
+          await ensureAuthReady();
+          await joinRoom(roomId, name);
+          await enterRoom(roomId);
+          return;
+        } catch (e2) {
+          console.error('[joinRoom] retry failed:', e2);
+          alert('Не удалось присоединиться: ' + (e2?.message || e2));
+          return;
+        }
+      }
+      alert('Не удалось присоединиться: ' + (e?.message || e));
+    } finally { joinBtn.disabled = false; }
   });
 }
 
@@ -90,7 +140,6 @@ async function startUpgradePhase(roomId) {
     }
     updates[`players/${pid}/upgradeChoices`] = choices;
     updates[`players/${pid}/upgradeSubmitted`] = false;
-    console.log('[startUpgradePhase]', pid, role, 'existing:', existingIds, '→ new:', choices);
   }
   updates.state = 'upgrade';
   await update(ref(db, `rooms/${roomId}`), updates);
@@ -219,5 +268,10 @@ function startPlaying(room, roomId) {
     gameInstance.start();
   });
 }
+
+// AUTH-FIX: глобальный лог необработанных промисов, чтобы видеть точное место
+window.addEventListener('unhandledrejection', (ev) => {
+  console.error('[unhandledrejection]', ev.reason);
+});
 
 init();
